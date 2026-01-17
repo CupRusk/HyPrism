@@ -2,8 +2,20 @@
 
 A multiplatform Hytale launcher with mod manager and more!
 
-**Important**: Since the app is not code-signed in macOS will show a "damaged" warning. To fix this:
-1. Open the the downloaded file
-2. Open Fix-HyPrism.command
+## Installation
 
-THIS PROJECT IS FOR EDUCATIONAL PURPOSE
+### Windows
+Download `HyPrism.exe` from [releases](https://github.com/yyyumeniku/HyPrism/releases/latest) and run.
+
+### macOS
+**Important**: Since the app is not code-signed, macOS will show a "damaged" warning. To fix:
+1. Open the downloaded DMG file
+2. Run `Fix-HyPrism.command`
+
+### Linux
+See [LINUX.md](LINUX.md) for detailed installation instructions. **TL;DR:** Use Flatpak for best compatibility.
+
+## Platform Support
+- ✅ Windows (fully supported)
+- ✅ macOS (ARM64, Intel)
+- ⚠️ Linux (Flatpak recommended, AppImage has dependency issues)
