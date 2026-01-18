@@ -38,9 +38,13 @@ sudo apt install libwebkit2gtk-4.0-37
 # Fedora
 sudo dnf install webkit2gtk4.0
 
-# Arch Linux
-sudo pacman -S webkit2gtk-4.1
+# Arch Linux / Manjaro
+# The webkit2gtk package provides the 4.1 API only. Install webkit2gtk-4.0 from AUR:
+yay -S webkit2gtk-4.0
+# Or use paru: paru -S webkit2gtk-4.0
 ```
+
+> **Note for Arch users:** Flatpak is recommended because `webkit2gtk-4.0` is only available from AUR.
 
 ### Install & Run
 
