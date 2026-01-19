@@ -161,19 +161,17 @@ jobs:
       - name: Create AppImage (Linux)
         if: matrix.platform == 'linux'
         run: |
-          # Use linuxdeploy to properly bundle ALL dependencies including WebKit
-          wget -q -O linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy
+          # Modern approach: Don't bundle WebKit, just require it as system dependency
+          # This is simpler, more reliable, and works better across different distros
           
-          # Download appimagetool as fallback
+          # Download appimagetool (latest version)
           wget -q -O appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           
           # Create AppDir structure
           mkdir -p HyPrism.AppDir/usr/bin
-          mkdir -p HyPrism.AppDir/usr/lib
           mkdir -p HyPrism.AppDir/usr/share/applications
-          mkdir -p HyPrism.AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps
           mkdir -p HyPrism.AppDir/usr/share/metainfo
           
           # Copy binary
@@ -181,14 +179,10 @@ jobs:
           chmod +x HyPrism.AppDir/usr/bin/HyPrism
           
           # Copy icon at 512x512 for high resolution displays
-          mkdir -p HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps
           convert build/appicon.png -resize 512x512 HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps/hyprism.png || {
-            echo "ImageMagick convert failed, trying sips..."
-            sips -z 512 512 build/appicon.png --out HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps/hyprism.png
+            cp build/appicon.png HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps/hyprism.png
           }
-          convert build/appicon.png -resize 512x512 HyPrism.AppDir/hyprism.png || {
-            cp HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps/hyprism.png HyPrism.AppDir/hyprism.png
-          }
+          cp HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps/hyprism.png HyPrism.AppDir/hyprism.png
           
           # Create desktop file (must be at root of AppDir)
           cat > HyPrism.AppDir/hyprism.desktop << 'DESKTOP'
@@ -224,286 +218,57 @@ jobs:
           </component>
           APPDATA
           
-          # Bundle ALL WebKit2GTK libraries and their dependencies
-          echo "Bundling WebKit2GTK and all dependencies..."
-          
-          # Bundle WebKit helper processes (CRITICAL - these are executables, not just libraries!)
-          echo "Bundling WebKit helper processes..."
-          mkdir -p HyPrism.AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
-          WEBKIT_PROCESSES="
-            /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess
-            /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess
-          "
-          for proc in $WEBKIT_PROCESSES; do
-            if [ -f "$proc" ]; then
-              cp "$proc" HyPrism.AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/
-              chmod +x HyPrism.AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/$(basename "$proc")
-              echo "Bundled: $(basename $proc)"
-            fi
-          done
-          
-          # Find and copy all required libraries with their dependencies
-          # Use ldd to find all dependencies of the main webkit libraries
-          # Use webkit2gtk-4.1 libraries (modern, supported by all current distros)
-          WEBKIT_LIBS="libwebkit2gtk-4.1.so.0 libjavascriptcoregtk-4.1.so.0"
-          for lib in $WEBKIT_LIBS; do
-            LIBPATH=$(find /usr/lib -name "$lib" 2>/dev/null | head -1)
-            if [ -n "$LIBPATH" ]; then
-              echo "Found $lib at $LIBPATH"
-              cp -L "$LIBPATH" HyPrism.AppDir/usr/lib/ 2>/dev/null || true
-            fi
-          done
-          
-          # Bundle ALL transitive dependencies by using ldd recursively
-          echo "Bundling all transitive dependencies..."
-          
-          # Function to recursively copy all dependencies
-          copy_deps() {
-            local lib="$1"
-            if [ ! -f "$lib" ]; then
-              return
-            fi
-            
-            # Get all dependencies
-            ldd "$lib" 2>/dev/null | grep "=> /" | awk '{print $3}' | while read dep; do
-              if [ -f "$dep" ]; then
-                local basename=$(basename "$dep")
-                if [ ! -f "HyPrism.AppDir/usr/lib/$basename" ]; then
-                  echo "Bundling: $basename"
-                  cp -L "$dep" HyPrism.AppDir/usr/lib/ 2>/dev/null || true
-                  # Recursively copy its dependencies
-                  copy_deps "$dep"
-                fi
-              fi
-            done
-          }
-          
-          # First, manually bundle the main WebKit libs and common missing ones
-          CRITICAL_LIBS="
-            libwoff2dec.so.1.0.2
-            libwoff2common.so.1.0.2
-            libbrotlidec.so.1
-            libbrotlicommon.so.1
-            libharfbuzz-icu.so.0
-            libharfbuzz.so.0
-            libicui18n.so.*
-            libicuuc.so.*
-            libicudata.so.*
-            libenchant-2.so.*
-            libhyphen.so.*
-            libsoup-3.0.so.*
-            libsecret-1.so.*
-            libnotify.so.*
-            libmanette-0.2.so.*
-            libwpe-1.0.so.*
-            libWPEBackend-fdo-1.0.so.*
-            libgraphite2.so.*
-            libjpeg.so.*
-            libpng16.so.*
-            libwebp.so.*
-            libopenjp2.so.*
-            liblcms2.so.*
-          "
-          
-          for pattern in $CRITICAL_LIBS; do
-            for libpath in /usr/lib/x86_64-linux-gnu/$pattern /usr/lib/$pattern; do
-              if [ -f "$libpath" ]; then
-                cp -L "$libpath" HyPrism.AppDir/usr/lib/ 2>/dev/null || true
-                echo "Bundled: $(basename $libpath)"
-                # Copy its dependencies too
-                copy_deps "$libpath"
-              fi
-            done
-          done
-          
-          # Copy dependencies of the main webkit libraries
-          for lib in HyPrism.AppDir/usr/lib/libwebkit2gtk-4.1.so.* HyPrism.AppDir/usr/lib/libjavascriptcoregtk-4.1.so.*; do
-            if [ -f "$lib" ]; then
-              copy_deps "$lib"
-            fi
-          done
-          
-          # CRITICAL: Remove glibc from bundle - bundling libc causes GLIBC_ABI_DT_RELR errors
-          # when system binaries (like grep) try to load our bundled older glibc
-          echo "Removing glibc from bundle (must use system glibc)..."
-          rm -f HyPrism.AppDir/usr/lib/libc.so* 2>/dev/null || true
-          rm -f HyPrism.AppDir/usr/lib/libpthread.so* 2>/dev/null || true
-          rm -f HyPrism.AppDir/usr/lib/libdl.so* 2>/dev/null || true
-          rm -f HyPrism.AppDir/usr/lib/libm.so* 2>/dev/null || true
-          rm -f HyPrism.AppDir/usr/lib/librt.so* 2>/dev/null || true
-          rm -f HyPrism.AppDir/usr/lib/ld-linux*.so* 2>/dev/null || true
-          
-          # Create comprehensive library list
-          echo "Checking for missing dependencies..."
-          ldd HyPrism.AppDir/usr/bin/HyPrism 2>/dev/null | grep "not found" || echo "No missing deps for binary"
-          
-          # Create AppRun with auto-download of missing libraries
+          # Create simple AppRun - no complex bundling, just use system WebKit
           cat > HyPrism.AppDir/AppRun << 'APPRUN'
           #!/bin/bash
-          # AppRun script for HyPrism with automatic library download
+          # Simple AppRun for HyPrism
           
           SELF=$(readlink -f "$0")
           HERE=${SELF%/*}
           
-          # Local library cache directory
-          LIBCACHE="${HOME}/.local/lib/hyprism"
-          mkdir -p "$LIBCACHE"
-          
-          # Library download URL (HyPrism releases - we bundle webkit libs there)
-          LIB_URL="https://github.com/yyyumeniku/HyPrism/releases/latest/download"
-          
-          # Function to check if a library exists anywhere (webkit2gtk-4.1)
-          check_lib() {
-            ldconfig -p 2>/dev/null | grep -q "$1" || \
-            [ -f "${HERE}/usr/lib/$1" ] || \
-            [ -f "${LIBCACHE}/$1" ] || \
-            [ -f "/usr/lib/$1" ] || \
-            [ -f "/usr/lib/x86_64-linux-gnu/$1" ]
-          }
-          
-          # Function to download libraries if missing
-          download_webkit_libs() {
-            echo "HyPrism: Checking for WebKit2GTK libraries..."
-            
-            # Check if we need to download (using webkit2gtk-4.1)
-            if ! check_lib "libwebkit2gtk-4.1.so.0"; then
-              echo "HyPrism: WebKit2GTK 4.1 not found. Downloading libraries..."
-              echo "This is a one-time setup that may take a minute."
-              echo ""
-              
-              # Try to download from multiple sources
-              DOWNLOAD_SUCCESS=false
-              
-              # Source 1: Pre-built library bundle from HyPrism releases
-              BUNDLE_URL="https://github.com/yyyumeniku/HyPrism/releases/latest/download/webkit2gtk-libs-x86_64.tar.gz"
-              
-              if command -v curl &> /dev/null; then
-                if curl -fsSL "$BUNDLE_URL" -o "/tmp/webkit-libs.tar.gz" 2>/dev/null; then
-                  tar -xzf "/tmp/webkit-libs.tar.gz" -C "$LIBCACHE" 2>/dev/null && DOWNLOAD_SUCCESS=true
-                  rm -f "/tmp/webkit-libs.tar.gz"
-                fi
-              elif command -v wget &> /dev/null; then
-                if wget -q "$BUNDLE_URL" -O "/tmp/webkit-libs.tar.gz" 2>/dev/null; then
-                  tar -xzf "/tmp/webkit-libs.tar.gz" -C "$LIBCACHE" 2>/dev/null && DOWNLOAD_SUCCESS=true
-                  rm -f "/tmp/webkit-libs.tar.gz"
-                fi
-              fi
-              
-              if [ "$DOWNLOAD_SUCCESS" = true ]; then
-                echo "HyPrism: Libraries downloaded successfully!"
-              else
-                echo ""
-                echo "╔══════════════════════════════════════════════════════════════╗"
-                echo "║  HyPrism requires WebKit2GTK 4.1 which is not installed.     ║"
-                echo "╠══════════════════════════════════════════════════════════════╣"
-                echo "║  Please install it manually:                                  ║"
-                echo "║                                                               ║"
-                echo "║  Arch Linux:  sudo pacman -S webkit2gtk-4.1                  ║"
-                echo "║  Ubuntu:      sudo apt install libwebkit2gtk-4.1-0           ║"
-                echo "║  Fedora:      sudo dnf install webkit2gtk4.1                 ║"
-                echo "║                                                               ║"
-                echo "║  Or use the Flatpak version which bundles all dependencies.  ║"
-                echo "╚══════════════════════════════════════════════════════════════╝"
-                echo ""
-                
-                # Show a GUI dialog if zenity is available
-                if command -v zenity &> /dev/null; then
-                  zenity --error --title="HyPrism - Missing Dependencies" \
-                    --text="WebKit2GTK 4.1 is required but not installed.\n\nPlease install it:\n• Arch: sudo pacman -S webkit2gtk-4.1\n• Ubuntu: sudo apt install libwebkit2gtk-4.1-0\n\nOr use the Flatpak version." \
-                    --width=400 2>/dev/null
-                elif command -v kdialog &> /dev/null; then
-                  kdialog --error "WebKit2GTK 4.1 is required but not installed.\n\nPlease install it:\n• Arch: sudo pacman -S webkit2gtk-4.1\n• Ubuntu: sudo apt install libwebkit2gtk-4.1-0\n\nOr use the Flatpak version." \
-                    --title "HyPrism - Missing Dependencies" 2>/dev/null
-                fi
-                
-                exit 1
-              fi
-            fi
-          }
-          
-          # Check and download libraries if needed
-          download_webkit_libs
-          
-          # Add library paths (bundled + cached + system)
-          export LD_LIBRARY_PATH="${HERE}/usr/lib:${LIBCACHE}:${LD_LIBRARY_PATH}"
-          
-          # Add our bundled binaries to path
+          # Export paths
           export PATH="${HERE}/usr/bin:${PATH}"
-          
-          # Handle XDG directories for proper file access
           export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
           
-          # CRITICAL: Tell WebKit where to find helper processes
-          # Check bundled processes first, then fall back to system
-          if [ -d "${HERE}/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1" ] && [ -f "${HERE}/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess" ]; then
-            export WEBKIT_EXEC_PATH="${HERE}/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
-            export WEBKIT_PROCESS_CMD_PREFIX="${HERE}/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
-          elif [ -d "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1" ]; then
-            export WEBKIT_EXEC_PATH="/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
-            export WEBKIT_PROCESS_CMD_PREFIX="/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
-          elif [ -d "/usr/libexec/webkit2gtk-4.1" ]; then
-            # Fedora/RHEL location
-            export WEBKIT_EXEC_PATH="/usr/libexec/webkit2gtk-4.1"
-            export WEBKIT_PROCESS_CMD_PREFIX="/usr/libexec/webkit2gtk-4.1"
-          fi
-          
-          # WebKit environment variables for better compatibility
-          export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-0}"
-          export WEBKIT_DISABLE_DMABUF_RENDERER=1
-          
-          # Final check: verify the binary can load before launching
-          if ! ldd "${HERE}/usr/bin/HyPrism" 2>&1 | grep -q "not found"; then
-            # All good, launch the application
-            cd "${HERE}/usr/bin"
-            exec ./HyPrism "$@"
-          else
-            # Still missing dependencies - show which ones
+          # Check if WebKit2GTK 4.1 is available on the system
+          if ! ldconfig -p 2>/dev/null | grep -q "libwebkit2gtk-4.1.so.0"; then
             echo ""
             echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║  ERROR: Still missing required libraries                     ║"
+            echo "║  HyPrism requires WebKit2GTK 4.1                            ║"
+            echo "╠══════════════════════════════════════════════════════════════╣"
+            echo "║  Please install it:                                          ║"
+            echo "║                                                              ║"
+            echo "║  • Arch:   sudo pacman -S webkit2gtk-4.1                    ║"
+            echo "║  • Ubuntu: sudo apt install libwebkit2gtk-4.1-0             ║"
+            echo "║  • Fedora: sudo dnf install webkit2gtk4.1                   ║"
+            echo "║  • SteamOS/Deck: Use the Flatpak version instead            ║"
             echo "╚══════════════════════════════════════════════════════════════╝"
             echo ""
-            echo "Missing libraries:"
-            ldd "${HERE}/usr/bin/HyPrism" 2>&1 | grep "not found"
-            echo ""
-            echo "Please install webkit2gtk-4.1 from your package manager"
-            echo "or use the Flatpak version."
-            echo ""
             
+            # Try to show a GUI dialog
             if command -v zenity &> /dev/null; then
-              MISSING=$(ldd "${HERE}/usr/bin/HyPrism" 2>&1 | grep "not found" | cut -d' ' -f1 | tr '\n' ' ')
-              zenity --error --title="HyPrism - Missing Libraries" \
-                --text="Still missing required libraries:\n\n$MISSING\n\nPlease use the Flatpak version or install webkit2gtk-4.1." \
-                --width=400 2>/dev/null
+              zenity --error --title="HyPrism - Missing Dependency" \
+                --text="WebKit2GTK 4.1 is required but not installed.\n\nInstall it:\n• Arch: sudo pacman -S webkit2gtk-4.1\n• Ubuntu: sudo apt install libwebkit2gtk-4.1-0\n• Fedora: sudo dnf install webkit2gtk4.1\n\nOr use the Flatpak version." \
+                --width=450 2>/dev/null
+            elif command -v kdialog &> /dev/null; then
+              kdialog --error "WebKit2GTK 4.1 is required but not installed.\n\nInstall it:\n• Arch: sudo pacman -S webkit2gtk-4.1\n• Ubuntu: sudo apt install libwebkit2gtk-4.1-0\n\nOr use the Flatpak version." \
+                --title "HyPrism - Missing Dependency" 2>/dev/null
             fi
             
             exit 1
           fi
+          
+          # Launch HyPrism
+          exec "${HERE}/usr/bin/HyPrism" "$@"
           APPRUN
           chmod +x HyPrism.AppDir/AppRun
           
-          # List bundled libraries for debugging
-          echo "Bundled libraries:"
-          ls -la HyPrism.AppDir/usr/lib/ || true
-          
-          # Create a standalone webkit libs bundle for download
-          echo "Creating webkit library bundle for auto-download..."
-          cd HyPrism.AppDir/usr/lib
-          tar -czvf ../../../webkit2gtk-libs-x86_64.tar.gz *.so* 2>/dev/null || echo "No libs to bundle"
-          cd ../../..
-          
-          # Build AppImage with ARCH set and extract-and-run for compatibility
+          # Build AppImage with ARCH set
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run HyPrism.AppDir HyPrism-x86_64.AppImage
-          
-          # Save the binary before cleaning build/bin
-          cp HyPrism.AppDir/usr/bin/HyPrism /tmp/HyPrism-binary
           
           # Replace binary with AppImage
           rm -rf build/bin/*
           mv HyPrism-x86_64.AppImage build/bin/
-          
-          # Move webkit libs bundle to build/bin for release
-          mv webkit2gtk-libs-x86_64.tar.gz build/bin/ 2>/dev/null || true
           
           # Also create a tar.gz for systems where AppImage doesn't work
           cd HyPrism.AppDir/usr/bin
