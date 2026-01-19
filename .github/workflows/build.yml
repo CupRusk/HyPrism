@@ -50,7 +50,8 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+          # Install both webkit2gtk versions - 4.0 for Flatpak (older distros), 4.1 for AppImage (modern distros)
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev
       
       - name: Build
         shell: bash
@@ -73,7 +74,19 @@ jobs:
           
           echo "Building version: $VERSION"
           echo "App title: $APP_TITLE"
+          
+          # Build with webkit2gtk-4.1 for AppImage (modern systems)
           wails build -clean -tags webkit2_41 -ldflags "-X 'HyPrism/app.AppVersion=$VERSION' -X 'HyPrism/app.AppTitle=$APP_TITLE'"
+          
+          # On Linux, also build with webkit2gtk-4.0 for Flatpak (older distros like PopOS 22.04)
+          if [[ "${{ matrix.platform }}" == "linux" ]]; then
+            mv build/bin/HyPrism build/bin/HyPrism-webkit41
+            echo "Building legacy version with webkit2gtk-4.0 for Flatpak..."
+            wails build -clean -ldflags "-X 'HyPrism/app.AppVersion=$VERSION' -X 'HyPrism/app.AppTitle=$APP_TITLE'"
+            mv build/bin/HyPrism build/bin/HyPrism-webkit40
+            # Restore webkit41 as main binary for AppImage
+            mv build/bin/HyPrism-webkit41 build/bin/HyPrism
+          fi
       
       - name: Create DMG (macOS)
         if: matrix.platform == 'macos'
@@ -178,8 +191,8 @@ jobs:
           cp build/bin/HyPrism HyPrism.AppDir/usr/bin/
           chmod +x HyPrism.AppDir/usr/bin/HyPrism
 
-          # Save a copy for Flatpak packaging before we wipe build/bin
-          cp build/bin/HyPrism /tmp/HyPrism-binary
+          # Save the webkit40 binary for Flatpak packaging (for older distros)
+          cp build/bin/HyPrism-webkit40 /tmp/HyPrism-flatpak-binary
           
           # Copy icon at 512x512 for high resolution displays
           convert build/appicon.png -resize 512x512 HyPrism.AppDir/usr/share/icons/hicolor/512x512/apps/hyprism.png || {
@@ -309,10 +322,11 @@ jobs:
           echo "Adding Flathub remote..."
           sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           
-          # Install required runtime with retries
-          echo "Installing GNOME Platform 46 (has webkit2gtk-4.1)..."
+          # Install required runtime with retries - using GNOME 42 for older distro compatibility
+          # GNOME 42 has webkit2gtk-4.0 and works with older GLIBC versions (e.g., PopOS 22.04)
+          echo "Installing GNOME Platform 42 (webkit2gtk-4.0 for older distro compatibility)..."
           for i in 1 2 3; do
-            if sudo flatpak install -y --noninteractive flathub org.gnome.Platform//46 org.gnome.Sdk//46; then
+            if sudo flatpak install -y --noninteractive flathub org.gnome.Platform//42 org.gnome.Sdk//42; then
               echo "Runtime installed successfully"
               break
             else
@@ -328,7 +342,8 @@ jobs:
           
           # Prepare all files in the flatpak directory
           echo "Preparing files..."
-          cp /tmp/HyPrism-binary flatpak/HyPrism
+          # Use the webkit40 binary for Flatpak (older distro compatibility)
+          cp /tmp/HyPrism-flatpak-binary flatpak/HyPrism
           chmod +x flatpak/HyPrism
           
           # Resize icon to 512x512 for Flatpak (max allowed size)
