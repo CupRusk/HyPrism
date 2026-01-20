@@ -28,7 +28,7 @@ interface ControlSectionProps {
   actions: {
     openFolder: () => void;
     showDelete: () => void;
-    showModManager: () => void;
+    showModManager: (query?: string) => void;
   };
 }
 
@@ -171,8 +171,8 @@ export const ControlSection: React.FC<ControlSectionProps> = ({
                   key={branch}
                   onClick={() => handleBranchSelect(branch)}
                   className={`w-full px-3 py-2 flex items-center gap-2 text-sm ${currentBranch === branch
-                      ? 'bg-white/20 text-white'
-                      : 'text-white/70 hover:bg-white/10 hover:text-white'
+                    ? 'bg-white/20 text-white'
+                    : 'text-white/70 hover:bg-white/10 hover:text-white'
                     }`}
                 >
                   {currentBranch === branch && <Check size={14} className="text-white" strokeWidth={3} />}
@@ -221,8 +221,8 @@ export const ControlSection: React.FC<ControlSectionProps> = ({
                       key={version}
                       onClick={() => handleVersionSelect(version)}
                       className={`w-full px-3 py-2 flex items-center justify-between gap-2 text-sm ${currentVersion === version
-                          ? 'bg-[#FFA845]/20 text-[#FFA845]'
-                          : 'text-white/70 hover:bg-white/10 hover:text-white'
+                        ? 'bg-[#FFA845]/20 text-[#FFA845]'
+                        : 'text-white/70 hover:bg-white/10 hover:text-white'
                         }`}
                     >
                       <div className="flex items-center gap-2">
@@ -251,7 +251,7 @@ export const ControlSection: React.FC<ControlSectionProps> = ({
 
       {/* Row 2: Nav buttons */}
       <div className="flex gap-3 items-center">
-        <NavBtn onClick={actions.showModManager} icon={<Package size={20} />} tooltip={t('Mod Manager')} />
+        <NavBtn onClick={() => actions.showModManager()} icon={<Package size={20} />} tooltip={t('Mod Manager')} />
         <NavBtn onClick={actions.openFolder} icon={<FolderOpen size={20} />} tooltip={t('Open Instance Folder')} />
         <NavBtn
           onClick={() => {
@@ -266,7 +266,11 @@ export const ControlSection: React.FC<ControlSectionProps> = ({
 
         <NavBtn onClick={openBugReport} icon={<Bug size={20} />} tooltip={t('Report Bug')} />
 
-        <LanguageSelector />
+        <LanguageSelector
+          currentBranch={currentBranch}
+          currentVersion={currentVersion}
+          onShowModManager={actions.showModManager}
+        />
 
         <button
           onClick={openCoffee}
