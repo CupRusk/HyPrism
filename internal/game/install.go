@@ -223,6 +223,16 @@ func EnsureInstalledVersionSpecific(ctx context.Context, versionType string, ver
 func InstallGameToInstance(ctx context.Context, versionType string, version int, progressCallback func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64)) error {
 	instanceGameDir := env.GetInstanceGameDir(versionType, version)
 
+	// For "latest" instance (version 0), we need to get the actual latest version
+	actualVersion := version
+	if version == 0 {
+		latestVer := pwr.FindLatestVersion(versionType)
+		if latestVer > 0 {
+			actualVersion = latestVer
+			fmt.Printf("Latest instance: downloading version %d\n", actualVersion)
+		}
+	}
+
 	// Download the patch file
 	pwrPath, err := pwr.DownloadPWR(ctx, versionType, 0, version, progressCallback)
 	if err != nil {
@@ -261,11 +271,16 @@ func InstallGameToInstance(ctx context.Context, versionType string, version int,
 	}
 
 	// Save version marker in instance directory
+	// For "latest" instance (version 0), save the actual version number so we know when to update
 	versionFile := filepath.Join(env.GetInstanceDir(versionType, version), "version.txt")
-	os.WriteFile(versionFile, []byte(fmt.Sprintf("%d", version)), 0644)
+	os.WriteFile(versionFile, []byte(fmt.Sprintf("%d", actualVersion)), 0644)
 
 	if progressCallback != nil {
-		progressCallback("complete", 100, fmt.Sprintf("%s v%d installed successfully", versionType, version), "", "", 0, 0)
+		if version == 0 {
+			progressCallback("complete", 100, fmt.Sprintf("%s latest (v%d) installed successfully", versionType, actualVersion), "", "", 0, 0)
+		} else {
+			progressCallback("complete", 100, fmt.Sprintf("%s v%d installed successfully", versionType, version), "", "", 0, 0)
+		}
 	}
 
 	return nil

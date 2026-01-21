@@ -157,47 +157,8 @@ func LaunchInstanceWithOptions(opts LaunchOptions) error {
 			fmt.Printf("Successfully patched game (%d occurrences)\n", patchResult.PatchCount)
 		}
 		
-		// On macOS, sign binaries AFTER patching (critical for it to work)
-		if runtime.GOOS == "darwin" {
-			fmt.Println("Signing patched binaries (macOS)...")
-			
-			clientPath := clientPatcher.FindClientPath(gameDir)
-			if clientPath != "" {
-				// Check if it's in an app bundle
-				appBundlePath := filepath.Dir(filepath.Dir(filepath.Dir(clientPath)))
-				if strings.HasSuffix(appBundlePath, ".app") {
-					fmt.Printf("Found app bundle: %s\n", appBundlePath)
-					// Remove quarantine attribute first
-					exec.Command("xattr", "-cr", appBundlePath).Run()
-					// Sign the entire app bundle with deep signing
-					cmd := exec.Command("codesign", "--force", "--deep", "--sign", "-", appBundlePath)
-					if output, err := cmd.CombinedOutput(); err != nil {
-						fmt.Printf("Warning: Failed to sign app bundle: %v\nOutput: %s\n", err, string(output))
-					} else {
-						fmt.Println("Successfully signed app bundle")
-					}
-				} else {
-					// Sign just the binary
-					exec.Command("xattr", "-cr", clientPath).Run()
-					cmd := exec.Command("codesign", "--force", "--sign", "-", clientPath)
-					if output, err := cmd.CombinedOutput(); err != nil {
-						fmt.Printf("Warning: Failed to sign binary: %v\nOutput: %s\n", err, string(output))
-					} else {
-						fmt.Println("Successfully signed binary")
-					}
-				}
-			}
-			
-			// Sign Java runtime too
-			signMacOSBinaries(jreDir, jrePath)
-			
-			// Sign server if it exists
-			serverPath := clientPatcher.FindServerPath(gameDir)
-			if serverPath != "" {
-				serverDir := filepath.Dir(serverPath)
-				exec.Command("xattr", "-cr", serverDir).Run()
-			}
-		}
+		// Note: Signing happens right before launch, not here
+		// This is because macOS needs fresh signature every time
 		
 		// Try to fetch auth tokens from server
 		fmt.Println("Fetching auth tokens...")
@@ -250,16 +211,30 @@ func LaunchInstanceWithOptions(opts LaunchOptions) error {
 	if runtime.GOOS == "darwin" {
 		appBundlePath := filepath.Join(gameDir, "Client", "Hytale.app")
 		
-		// CRITICAL for macOS: Remove quarantine and re-sign right before launch
-		// This prevents "app is damaged" errors from Gatekeeper
-		fmt.Println("Preparing macOS app for launch...")
-		exec.Command("xattr", "-cr", appBundlePath).Run()
+		// CRITICAL macOS fix: Sign app right before launch every time
+		// This is needed because patching invalidates the signature
+		fmt.Println("Signing Hytale.app for macOS launch...")
 		
-		// Re-sign the app bundle with ad-hoc signature
-		signCmd := exec.Command("codesign", "--force", "--deep", "--sign", "-", appBundlePath)
-		if output, err := signCmd.CombinedOutput(); err != nil {
-			fmt.Printf("Warning: Could not sign app before launch: %v\nOutput: %s\n", err, string(output))
-			// Continue anyway - xattr removal might be enough
+		// Remove all quarantine attributes recursively
+		xattrCmd := exec.Command("xattr", "-cr", appBundlePath)
+		xattrCmd.Run() // Ignore errors
+		
+		// Sign with codesign - use ad-hoc signature
+		// Must use --force to overwrite existing signature after patching
+		codesignCmd := exec.Command("codesign", 
+			"--force",
+			"--deep", 
+			"--sign", "-",
+			"--preserve-metadata=entitlements",
+			appBundlePath)
+		
+		if output, err := codesignCmd.CombinedOutput(); err != nil {
+			fmt.Printf("Signing failed: %s\n", string(output))
+			// Try again without preserve-metadata
+			simpleSign := exec.Command("codesign", "--force", "--deep", "--sign", "-", appBundlePath)
+			if out2, err2 := simpleSign.CombinedOutput(); err2 != nil {
+				fmt.Printf("Warning: Could not sign app: %v\nOutput: %s\n", err2, string(out2))
+			}
 		} else {
 			fmt.Println("App signed successfully")
 		}
