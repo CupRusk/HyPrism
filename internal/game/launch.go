@@ -199,8 +199,10 @@ func LaunchInstanceWithOptions(opts LaunchOptions) error {
 
 	// Add auth tokens if available and in authenticated mode
 	if authMode == "authenticated" && tokens != nil {
+		// When using identity token, also pass username for profile
 		if tokens.IdentityToken != "" {
 			commonArgs = append(commonArgs, "--identity-token", tokens.IdentityToken)
+			commonArgs = append(commonArgs, "--username", opts.PlayerName)
 		}
 		if tokens.SessionToken != "" {
 			commonArgs = append(commonArgs, "--session-token", tokens.SessionToken)
