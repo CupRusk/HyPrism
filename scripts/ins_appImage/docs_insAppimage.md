@@ -1,40 +1,50 @@
-
 # HyPrism Linux Installer
 
-This document explains how to use the Linux installer script for HyPrism.
+This document explains how to install and run HyPrism on Linux using the provided bash script.
 
 ## Features
 
 * Downloads the latest `x86_64` AppImage from the official HyPrism GitHub releases.
 * Makes the AppImage executable.
-* Creates shortcuts on the Desktop and in the application menu (`.desktop` files) with proper icons.
+* Creates Desktop and application menu shortcuts (`.desktop` files) with proper icons.
+* Automatically sets up a Python virtual environment and installs required dependencies (`requests`).
+
+## Requirements
+
+* Linux system with bash
+* Python 3 installed
+* pip installed
 
 ## Usage
 
-1. Open a terminal and run the installer:
+1. Make sure the bash script is executable:
 
 ```bash
-python3 main.py [installation_directory]
+chmod +x install.sh
+```
+
+2. Run the installer:
+
+```bash
+./install.sh [installation_directory]
 ```
 
 * `[installation_directory]` is optional. Default is `~/Applications/HyPrism`.
 
-2. The script will download the latest AppImage and make it executable.
+3. The script will:
 
-3. You will be asked if you want to create shortcuts. Type `y` to create them.
+   * Check for Python 3 and pip
+   * Create a virtual environment (`.venv`) if it doesn't exist
+   * Install dependencies
+   * Run the Python installer (`main.py`) to download AppImage and create shortcuts
 
-4. Shortcuts will be placed:
+4. When prompted, type `y` to create shortcuts:
 
    * Desktop: `~/Desktop/HyPrism.desktop`
    * Application menu: `~/.local/share/applications/HyPrism.desktop`
 
-## Requirements
-
-* Python 3
-* Linux system with XDG-compliant Desktop Environment (GNOME, KDE, etc.)
-
 ## Notes
 
-* If the icon does not appear in the menu, make sure `HyPrism_icon.png` is in the installation directory.
-* Tested on Arch Linux with AppImage support.
-
+* Tested on Arch Linux. Should work on most Linux distributions with Python 3 and bash.
+* If the icon does not appear in the menu, ensure `HyPrism_icon.png` is in the installation directory.
+* You can re-run the installer at any time to update AppImage or recreate shortcuts.
