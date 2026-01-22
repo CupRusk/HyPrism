@@ -221,6 +221,19 @@ func LaunchInstanceWithOptions(opts LaunchOptions) error {
 		xattrCmd := exec.Command("xattr", "-cr", appBundlePath)
 		xattrCmd.Run() // Ignore errors
 		
+		// CRITICAL: Remove .original backup files from app bundle before signing
+		// The patcher creates these and they break codesign --deep
+		macOSDir := filepath.Join(appBundlePath, "Contents", "MacOS")
+		if entries, err := os.ReadDir(macOSDir); err == nil {
+			for _, entry := range entries {
+				if strings.HasSuffix(entry.Name(), ".original") {
+					backupPath := filepath.Join(macOSDir, entry.Name())
+					fmt.Printf("Removing backup file before signing: %s\n", entry.Name())
+					os.Remove(backupPath)
+				}
+			}
+		}
+		
 		// Sign with codesign - use ad-hoc signature
 		// Must use --force to overwrite existing signature after patching
 		codesignCmd := exec.Command("codesign", 
