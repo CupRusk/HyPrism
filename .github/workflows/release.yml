@@ -227,12 +227,36 @@ jobs:
           # Create x64 DMG
           mkdir -p dmg-x64
           cp -R "artifacts/HyPrism-x64.app" "dmg-x64/HyPrism.app"
+          cat > "dmg-x64/Open_HyPrism.command" << 'EOF'
+          #!/bin/bash
+          APP="$(dirname "$0")/HyPrism.app"
+          xattr -cr "$APP"
+          open "$APP"
+          EOF
+          chmod +x "dmg-x64/Open_HyPrism.command"
+          cat > "dmg-x64/README.txt" << 'EOF'
+          If macOS says the app is damaged or incomplete:
+          1) Drag HyPrism.app into Applications.
+          2) Run Open_HyPrism.command to clear quarantine and launch.
+          EOF
           ln -s /Applications dmg-x64/Applications
           hdiutil create -volname "HyPrism" -srcfolder dmg-x64 -ov -format UDZO artifacts/HyPrism-macos-x64.dmg
           
           # Create arm64 DMG
           mkdir -p dmg-arm64
           cp -R "artifacts/HyPrism-arm64.app" "dmg-arm64/HyPrism.app"
+          cat > "dmg-arm64/Open_HyPrism.command" << 'EOF'
+          #!/bin/bash
+          APP="$(dirname "$0")/HyPrism.app"
+          xattr -cr "$APP"
+          open "$APP"
+          EOF
+          chmod +x "dmg-arm64/Open_HyPrism.command"
+          cat > "dmg-arm64/README.txt" << 'EOF'
+          If macOS says the app is damaged or incomplete:
+          1) Drag HyPrism.app into Applications.
+          2) Run Open_HyPrism.command to clear quarantine and launch.
+          EOF
           ln -s /Applications dmg-arm64/Applications
           hdiutil create -volname "HyPrism" -srcfolder dmg-arm64 -ov -format UDZO artifacts/HyPrism-macos-arm64.dmg
 
