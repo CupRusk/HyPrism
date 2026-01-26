@@ -149,18 +149,19 @@ jobs:
             /p:IncludeNativeLibrariesForSelfExtract=true `
             /p:IncludeAllContentForSelfExtract=true `
             /p:OutputType=WinExe /p:ApplicationManifest=app.manifest `
+            /p:ApplicationIcon=packaging/windows/HyPrism.ico `
             -o artifacts/win-x64
 
-      - name: Create Windows zip
+      - name: Rename Windows exe for release
         run: |
-          # Only include HyPrism.exe in the release zip
-          Compress-Archive -Path artifacts/win-x64/HyPrism.exe -DestinationPath artifacts/HyPrism-windows-x64.zip
+          # Rename to include version info for direct download
+          Copy-Item artifacts/win-x64/HyPrism.exe artifacts/HyPrism-windows-x64.exe
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-builds
-          path: artifacts/HyPrism-windows-x64.zip
+          path: artifacts/HyPrism-windows-x64.exe
 
   build-macos:
     runs-on: macos-latest
@@ -285,7 +286,7 @@ jobs:
             "windows": {
               "amd64": {
                 "launcher": {
-                  "url": "https://github.com/yyyumeniku/HyPrism/releases/download/$TAG_NAME/HyPrism-windows-x64.zip",
+                  "url": "https://github.com/yyyumeniku/HyPrism/releases/download/$TAG_NAME/HyPrism-windows-x64.exe",
                   "sha256": ""
                 }
               }

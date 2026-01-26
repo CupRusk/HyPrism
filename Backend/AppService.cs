@@ -898,7 +898,7 @@ public class AppService : IDisposable
         }
     }
 
-    public string GetLauncherVersion() => "2.0.3";
+    public string GetLauncherVersion() => "2.0.1";
 
     // Version Management
     public string GetVersionType() => _config.VersionType;
@@ -2450,7 +2450,7 @@ public class AppService : IDisposable
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                     targetAsset = "macos-arm64.dmg";
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                    targetAsset = "windows-x64.zip";
+                    targetAsset = "windows-x64.exe";
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
                     targetAsset = arch == Architecture.Arm64 ? "linux-arm64.tar.gz" : "linux-x64.AppImage";
 
@@ -2678,7 +2678,7 @@ public class AppService : IDisposable
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                targetAsset = "windows-x64.zip";
+                targetAsset = "windows-x64.exe";
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
@@ -2751,7 +2751,47 @@ public class AppService : IDisposable
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                try { Process.Start("explorer.exe", $"/select,\"{targetPath}\""); } catch (Exception openEx) { Logger.Warning("Update", $"Could not open Explorer: {openEx.Message}"); }
+                try
+                {
+                    // Get current executable path
+                    var currentExe = Environment.ProcessPath;
+                    if (string.IsNullOrEmpty(currentExe))
+                    {
+                        Logger.Error("Update", "Could not determine current executable path");
+                        Process.Start("explorer.exe", $"/select,\"{targetPath}\"");
+                        return true;
+                    }
+
+                    // Create a batch script to replace the exe and restart
+                    var batchPath = Path.Combine(Path.GetTempPath(), "hyprism_update.bat");
+                    var batchContent = $@"@echo off
+timeout /t 2 /nobreak >nul
+del ""{currentExe}"" 2>nul
+move /y ""{targetPath}"" ""{currentExe}""
+start """" ""{currentExe}""
+del ""%~f0""
+";
+                    File.WriteAllText(batchPath, batchContent);
+
+                    // Start the batch script and exit
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = batchPath,
+                        UseShellExecute = true,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+                    Process.Start(psi);
+
+                    // Exit this application so the batch can replace the exe
+                    Logger.Info("Update", "Starting update script and exiting...");
+                    Environment.Exit(0);
+                }
+                catch (Exception updateEx)
+                {
+                    Logger.Warning("Update", $"Auto-update failed, opening Explorer: {updateEx.Message}");
+                    Process.Start("explorer.exe", $"/select,\"{targetPath}\"");
+                }
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
