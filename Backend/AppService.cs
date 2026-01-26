@@ -898,7 +898,7 @@ public class AppService : IDisposable
         }
     }
 
-    public string GetLauncherVersion() => "2.0.2";
+    public string GetLauncherVersion() => "2.0.3";
 
     // Version Management
     public string GetVersionType() => _config.VersionType;
