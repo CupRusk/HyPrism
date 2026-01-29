@@ -340,9 +340,10 @@ jobs:
           ls -la "$FOUND" | sed -n '1,200p'
           chmod +x "$FOUND"/HyPrism || true
 
-      - name: Build Flatpak
+      - name: Build Flatpak (simplified)
         run: |
-          set -e
+          set -euo pipefail
+
           # Prepare bundle from linux-x64 artifacts (place into packaging/flatpak so manifest sources match)
           rm -rf packaging/flatpak/bundle || true
           mkdir -p packaging/flatpak/bundle
@@ -357,45 +358,28 @@ jobs:
             exit 1
           fi
 
+          # Install flatpak tooling
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder || true
 
-          # Use user-mode remotes to avoid system ConfigureRemote permission errors on runners
-          echo "Listing current flatpak remotes (system):"; flatpak remotes || true
-          echo "Listing current flatpak remotes (user):"; flatpak --user remotes || true
-          flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || true
-          echo "After adding (user) remote:"; flatpak --user remotes || true
+          # Configure remotes: flathub and flathub-beta (system preferred, fallback to user)
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || true
+          flatpak remote-add --if-not-exists flathub-beta https://flathub.org/repo/flathub.flatpakrepo || flatpak --user remote-add --if-not-exists flathub-beta https://flathub.org/repo/flathub.flatpakrepo || true
 
-          # Try to ensure the required SDK is installed (user scope). If it is missing, attempt install.
-          SDK_NAME="org.freedesktop.Sdk"
-          SDK_VER="25.08"
-          if ! flatpak --user info "$SDK_NAME"//"$SDK_VER" >/dev/null 2>&1; then
-            echo "SDK $SDK_NAME/$SDK_VER not found in user scope; attempting user install from flathub (may require network)"
-            flatpak --user install -y flathub "$SDK_NAME"//"$SDK_VER" || true
-          fi
-          echo "Installed user flatpak runtimes:"; flatpak --user list || true
+          # Build with dependencies pulled from flathub and flathub-beta
+          flatpak-builder --force-clean --repo=repo builddir --install-deps-from=flathub --install-deps-from=flathub-beta packaging/flatpak/dev.hyprism.HyPrism.json > flatpak-build.log 2>&1 || true
 
-          # Build the Flatpak repo and create a single bundle file (capture logs for debugging)
-          set -x
-          flatpak-builder --force-clean --repo=repo --user builddir packaging/flatpak/dev.hyprism.HyPrism.json > flatpak-build.log 2>&1 || true
-          echo "----- flatpak-builder log (head) -----"
-          sed -n '1,400p' flatpak-build.log || true
-          echo "Repo listing (if created):"; ls -la repo || true
-          echo "Builddir listing (if created):"; ls -la builddir || true
-
-          # Attempt to produce a bundle if repo was created
+          # If repo was created, try to create a bundle
           if [ -d repo ] && [ "$(ls -A repo | wc -c)" -gt 0 ]; then
-            flatpak build-bundle repo artifacts/HyPrism.flatpak dev.hyprism.HyPrism > flatpak-build.log 2>&1 || true
+            flatpak build-bundle repo artifacts/HyPrism.flatpak dev.hyprism.HyPrism >> flatpak-build.log 2>&1 || true
           fi
 
-          # Copy build log into artifacts so it can be uploaded regardless of failure
           mkdir -p artifacts
           cp flatpak-build.log artifacts/flatpak-build.log || true
 
-          # Fail fast if bundle wasn't produced
           if [ ! -f artifacts/HyPrism.flatpak ]; then
             echo "ERROR: artifacts/HyPrism.flatpak not produced by flatpak build. See artifacts/flatpak-build.log for details."
-            echo "Recent flatpak-builder output:"; sed -n '1,400p' artifacts/flatpak-build.log || true
+            sed -n '1,400p' artifacts/flatpak-build.log || true
             exit 1
           fi
 
