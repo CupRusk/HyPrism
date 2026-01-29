@@ -46,7 +46,7 @@ jobs:
       - name: Build Linux x64
         run: |
           dotnet restore
-          dotnet publish -c Release -r linux-x64 --self-contained true \
+          dotnet publish ./HyPrism.csproj -c Release -r linux-x64 --self-contained true \
             /p:PublishSingleFile=true /p:PublishReadyToRun=true \
             /p:IncludeNativeLibrariesForSelfExtract=true \
             /p:IncludeAllContentForSelfExtract=true \
@@ -54,7 +54,7 @@ jobs:
 
       - name: Build Linux arm64
         run: |
-          dotnet publish -c Release -r linux-arm64 --self-contained true \
+          dotnet publish ./HyPrism.csproj -c Release -r linux-arm64 --self-contained true \
             /p:PublishSingleFile=true /p:PublishReadyToRun=true \
             /p:IncludeNativeLibrariesForSelfExtract=true \
             /p:IncludeAllContentForSelfExtract=true \
@@ -90,12 +90,22 @@ jobs:
           cd frontend
           npm ci
           npm run build
+          # Vite is configured to write to ../wwwroot (see frontend/vite.config.ts)
+          # Verify output exists and fail the job if not
+          if [ -d "../wwwroot" ] && [ "$(ls -A ../wwwroot | wc -c)" -gt 0 ]; then
+            echo "Frontend build succeeded and ../wwwroot is populated"
+            ls -la ../wwwroot | sed -n '1,200p'
+          else
+            echo "ERROR: Frontend build did not produce expected output in ../wwwroot"
+            ls -la .. | sed -n '1,200p'
+            exit 1
+          fi
 
       - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
-          path: frontend/dist
+          path: wwwroot/**
 
   publish-backend:
     runs-on: ubuntu-22.04
@@ -110,11 +120,11 @@ jobs:
       - name: Restore & Publish backend
         run: |
           dotnet restore
-          dotnet publish -c Release -r linux-x64 --self-contained true \
+          dotnet publish ./HyPrism.csproj -c Release -r linux-x64 --self-contained true \
             /p:PublishSingleFile=true /p:PublishReadyToRun=true \
             /p:IncludeNativeLibrariesForSelfExtract=true /p:IncludeAllContentForSelfExtract=true \
             -o artifacts/linux-x64
-          dotnet publish -c Release -r linux-arm64 --self-contained true \
+          dotnet publish ./HyPrism.csproj -c Release -r linux-arm64 --self-contained true \
             /p:PublishSingleFile=true /p:PublishReadyToRun=true \
             /p:IncludeNativeLibrariesForSelfExtract=true /p:IncludeAllContentForSelfExtract=true \
             -o artifacts/linux-arm64
@@ -147,13 +157,18 @@ jobs:
 
       - name: Merge frontend into publish
         run: |
-          # Copy frontend dist into both linux publish outputs (if present)
-          if [ -d "frontend-dist" ]; then
-            mkdir -p artifacts/linux-x64/wwwroot
-            mkdir -p artifacts/linux-arm64/wwwroot
-            cp -R frontend-dist/* artifacts/linux-x64/wwwroot/ || true
-            cp -R frontend-dist/* artifacts/linux-arm64/wwwroot/ || true
+          # Fail if frontend artifact wasn't produced
+          if [ ! -d "frontend-dist" ] || [ "$(ls -A frontend-dist | wc -c)" -eq 0 ]; then
+            echo "ERROR: frontend-dist is missing or empty. Ensure build-frontend produced the artifact."
+            ls -la | sed -n '1,200p'
+            exit 1
           fi
+
+          # Copy frontend dist into both linux publish outputs
+          mkdir -p artifacts/linux-x64/wwwroot
+          mkdir -p artifacts/linux-arm64/wwwroot
+          cp -R frontend-dist/* artifacts/linux-x64/wwwroot/ || true
+          cp -R frontend-dist/* artifacts/linux-arm64/wwwroot/ || true
 
       - name: Create tar.gz archives
         run: |
@@ -322,7 +337,7 @@ jobs:
       - name: Build Windows x64
         run: |
           dotnet restore
-          dotnet publish -c Release -r win-x64 --self-contained true `
+          dotnet publish ./HyPrism.csproj -c Release -r win-x64 --self-contained true `
             /p:PublishSingleFile=true /p:PublishReadyToRun=true `
             /p:IncludeNativeLibrariesForSelfExtract=true `
             /p:IncludeAllContentForSelfExtract=true `
@@ -364,7 +379,7 @@ jobs:
 
       - name: Build macOS arm64
         run: |
-          dotnet publish -c Release -r osx-arm64 --self-contained true \
+          dotnet publish ./HyPrism.csproj -c Release -r osx-arm64 --self-contained true \
             -o artifacts/osx-arm64
 
       - name: Create macOS app bundle (arm64 only)
@@ -425,16 +440,42 @@ jobs:
       - name: List release assets
         run: ls -la release-assets/
 
-      - name: Create version.json for auto-updater
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Determine version from app.manifest / input / tag
+        id: determine_version
         run: |
-          # Determine version/tag (use tag if present, otherwise use workflow_dispatch input)
-          if [ -n "${GITHUB_REF_NAME}" ]; then
+          set -euo pipefail
+          # Prefer tag reference
+          if [ -n "${GITHUB_REF_NAME:-}" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
             TAG_NAME="${GITHUB_REF_NAME}"
-          else
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
             TAG_NAME="${{ github.event.inputs.version }}"
+          else
+            if [ ! -f app.manifest ]; then
+              echo "ERROR: app.manifest not found"
+              exit 1
+            fi
+            RAW=$(grep -oP 'assemblyIdentity\s+[^>]*version="\K[^"]+' app.manifest || true)
+            if [ -z "$RAW" ]; then
+              echo "ERROR: could not parse version from app.manifest"
+              exit 1
+            fi
+            IFS=. read -r MAJOR MINOR PATCH REST <<<"$RAW"
+            PATCH=${PATCH:-0}
+            VERSION="$MAJOR.$MINOR.$PATCH"
+            TAG_NAME="v$VERSION"
           fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create version.json for auto-updater
+        run: |
+          VERSION="${{ steps.determine_version.outputs.version }}"
+          TAG_NAME="${{ steps.determine_version.outputs.tag_name }}"
 
           cat > release-assets/version.json << EOF
           {
