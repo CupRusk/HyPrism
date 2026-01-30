@@ -379,7 +379,10 @@ jobs:
 
           if [ ! -f artifacts/HyPrism.flatpak ]; then
             echo "ERROR: artifacts/HyPrism.flatpak not produced by flatpak build. See artifacts/flatpak-build.log for details."
+            echo "----- flatpak-build.log (head) -----"
             sed -n '1,400p' artifacts/flatpak-build.log || true
+            echo "----- flatpak-build.log (tail) -----"
+            tail -n 200 artifacts/flatpak-build.log || true
             exit 1
           fi
 
