@@ -42,6 +42,21 @@
       ]
     },
     {
+      "name": "unifdef",
+      "buildsystem": "simple",
+      "build-commands": [
+        "make -j$(nproc)",
+        "make install PREFIX=/app"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/fanf2/unifdef/archive/refs/tags/unifdef-2.12.tar.gz",
+          "sha256": "030369db9ff917acfae7fa4e90bcc1dff8a8dc534d82d1c72c12ef698d2f20e4"
+        }
+      ]
+    },
+    {
         "name": "webkit2gtk-4.0",
         "buildsystem": "cmake-ninja",
         "config-opts": [
@@ -57,6 +72,9 @@
             "-DENABLE_GAMEPAD=ON",
             "-DUSE_JPEGXL=OFF"
         ],
+          "build-options": {
+            "append-path": "/app/bin"
+          },
         "sources": [
             {
                 "type": "archive",
