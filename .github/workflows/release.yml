@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      prerelease:
+        description: 'Set to true to mark the GitHub Release as prerelease'
+        required: false
+        default: true
+        type: boolean
 
 env:
   DOTNET_VERSION: '8.0.x'
@@ -597,20 +602,49 @@ jobs:
           path: artifacts/HyPrism-macos-arm64.dmg
 
   release:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.do_release == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.do_release == 'true' && always() }}
     needs: [package-appimage, package-flatpak, package-deb-rpm, build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Check build results (fail only if all failed)
+        run: |
+          set -euo pipefail
+          RESULTS=(
+            "${{ needs.package-appimage.result }}"
+            "${{ needs.package-flatpak.result }}"
+            "${{ needs.package-deb-rpm.result }}"
+            "${{ needs.build-windows.result }}"
+            "${{ needs.build-macos.result }}"
+          )
+
+          HAS_SUCCESS=false
+          for r in "${RESULTS[@]}"; do
+            if [ "$r" = "success" ]; then
+              HAS_SUCCESS=true
+              break
+            fi
+          done
+
+          if [ "$HAS_SUCCESS" = "false" ]; then
+            echo "ERROR: Tutte le build sono fallite o sono state annullate. Release bloccata."
+            exit 1
+          fi
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           path: release-assets
           merge-multiple: true
 
+      - name: Ensure release-assets exists
+        run: |
+          mkdir -p release-assets
+
       - name: List release assets
-        run: ls -la release-assets/
+        run: ls -la release-assets/ || true
 
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -704,6 +738,43 @@ jobs:
           }
           EOF
 
+      - name: Detect missing release artifacts
+        id: detect_missing
+        run: |
+          set -euo pipefail
+          EXPECTED=(
+            "HyPrism-linux-x64.tar.gz"
+            "HyPrism-linux-arm64.tar.gz"
+            "HyPrism-linux-x64.deb"
+            "HyPrism-linux-x64.rpm"
+            "HyPrism-linux-x64.AppImage"
+            "HyPrism.flatpak"
+            "HyPrism-windows-x64.exe"
+            "HyPrism-macos-arm64.dmg"
+          )
+
+          MISSING=()
+          for f in "${EXPECTED[@]}"; do
+            if [ ! -f "release-assets/$f" ]; then
+              MISSING+=("$f")
+            fi
+          done
+
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            {
+              echo "warning_block<<EOF"
+              echo "### ⚠️ Build warnings"
+              echo "Le seguenti build non sono state pubblicate perché fallite:"
+              for m in "${MISSING[@]}"; do
+                echo "- $m"
+              done
+              echo ""
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "warning_block=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -711,6 +782,8 @@ jobs:
           name: HyPrism ${{ github.ref_name }}
           body: |
             ## HyPrism ${{ github.ref_name }}
+
+            ${{ steps.detect_missing.outputs.warning_block }}
             
             ### Downloads
             
@@ -732,6 +805,6 @@ jobs:
             - Improved performance and stability
             - Ukrainian language support added
           draft: false
-          prerelease: false
+          prerelease: ${{ github.event.inputs.prerelease }}
           files: |
             release-assets/*
