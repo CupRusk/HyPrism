@@ -12,7 +12,8 @@
 
 A multiplatform Hytale launcher with mod manager and more!
 
-<img width="3084" height="1964" alt="Screenshot 2026-01-17 at 22 29 55@2x" src="https://github.com/user-attachments/assets/0a27bc91-d6d5-4148-ae3b-f9e6c36cd6db" />
+<img width="3016" height="2056" alt="Screenshot 2026-01-31 at 07 36 56@2x" src="https://github.com/user-attachments/assets/edfccc21-b08b-4ae5-95b9-cfebd0c30358" />
+
 
 ## Installation
 Downloads are available in [releases](https://github.com/yyyumeniku/HyPrism/releases)
