@@ -320,6 +320,10 @@ export function InstallLocalModFile(sourcePath, branch, version) {
     return callBackend('InstallLocalModFile', sourcePath, branch, version);
 }
 
+export function InstallModFromBase64(fileName, base64Content, branch, version) {
+    return callBackend('InstallModFromBase64', fileName, base64Content, branch, version);
+}
+
 export function ExportModList(branch, version) {
     return callBackend('ExportModList', branch, version);
 }
@@ -406,6 +410,10 @@ export function SelectInstanceDirectory() {
 
 export function BrowseFolder(initialPath) {
     return callBackend('BrowseFolder', initialPath || null);
+}
+
+export function BrowseModFiles() {
+    return callBackend('BrowseModFiles');
 }
 
 export function SetInstanceDirectory(path) {

@@ -5541,6 +5541,150 @@ rm -f ""$0""
     }
     
     /// <summary>
+    /// Installs a mod file from base64 content (used for drag-and-drop from browser).
+    /// </summary>
+    public async Task<bool> InstallModFromBase64(string fileName, string base64Content, string branch, int version)
+    {
+        try
+        {
+            Logger.Info("Mods", $"Installing mod from base64: {fileName}, content length: {base64Content?.Length ?? 0}");
+            
+            if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(base64Content))
+            {
+                Logger.Error("Mods", "Invalid file name or content");
+                return false;
+            }
+            
+            // Decode base64 content
+            byte[] fileBytes;
+            try
+            {
+                // The content should be pure base64 (no data URL prefix)
+                fileBytes = Convert.FromBase64String(base64Content);
+                Logger.Success("Mods", $"Decoded base64 content: {fileBytes.Length} bytes");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Mods", $"Failed to decode base64 content: {ex.Message}");
+                return false;
+            }
+            
+            // Get the target instance path and create mods directory
+            string resolvedBranch = string.IsNullOrWhiteSpace(branch) ? _config.VersionType : branch;
+            
+            var existingPath = FindExistingInstancePath(resolvedBranch, version);
+            string versionPath;
+            
+            if (!string.IsNullOrWhiteSpace(existingPath) && Directory.Exists(existingPath))
+            {
+                versionPath = existingPath;
+            }
+            else
+            {
+                versionPath = GetInstancePath(resolvedBranch, version);
+                Logger.Info("Mods", $"Instance not found, creating mod directory at: {versionPath}");
+            }
+            
+            string modsPath = GetModsPath(versionPath);
+            var destPath = Path.Combine(modsPath, fileName);
+            
+            // Write the file
+            await File.WriteAllBytesAsync(destPath, fileBytes);
+            Logger.Success("Mods", $"Saved mod from drag-drop: {fileName} ({fileBytes.Length} bytes)");
+            
+            // Generate a local ID based on filename
+            var localId = $"local-{Path.GetFileNameWithoutExtension(fileName)}";
+            var modName = Path.GetFileNameWithoutExtension(fileName);
+            
+            // Try to extract version from filename
+            var versionMatch = System.Text.RegularExpressions.Regex.Match(modName, @"[-_]v?(\d+(?:\.\d+)*(?:-\w+)?)\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            string modVersion = versionMatch.Success ? versionMatch.Groups[1].Value : "1.0";
+            
+            if (versionMatch.Success)
+            {
+                modName = modName.Substring(0, versionMatch.Index).TrimEnd('-', '_', ' ');
+            }
+            
+            modName = modName.Replace('_', ' ').Replace('-', ' ');
+            
+            var newMod = new InstalledMod
+            {
+                Id = localId,
+                Name = modName,
+                FileName = fileName,
+                Enabled = true,
+                Version = modVersion,
+                Author = "",
+                Description = ""
+            };
+            
+            // Try to look up mod info on CurseForge using fingerprint
+            try
+            {
+                Logger.Info("Mods", $"Looking up mod metadata on CurseForge for: {fileName}");
+                var cfInfo = await LookupModOnCurseForgeAsync(destPath);
+                if (cfInfo != null)
+                {
+                    Logger.Success("Mods", $"Found CurseForge match for {fileName}: {cfInfo.Name}");
+                    Logger.Info("Mods", $"  - Mod ID: {cfInfo.ModId}, File ID: {cfInfo.FileId}");
+                    Logger.Info("Mods", $"  - Author: {cfInfo.Author}, Version: {cfInfo.Version}");
+                    newMod.CurseForgeId = cfInfo.ModId;
+                    newMod.FileId = cfInfo.FileId;
+                    newMod.Name = cfInfo.Name ?? modName;
+                    newMod.Version = cfInfo.Version ?? modVersion;
+                    newMod.Author = cfInfo.Author ?? "";
+                    newMod.Description = cfInfo.Description ?? "";
+                    newMod.IconUrl = cfInfo.IconUrl ?? "";
+                    newMod.Id = cfInfo.ModId;
+                }
+                else
+                {
+                    Logger.Warning("Mods", $"No CurseForge match found for {fileName} - using local metadata");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning("Mods", $"Could not look up mod on CurseForge: {ex.Message}");
+            }
+            
+            // Update manifest
+            await _modManifestLock.WaitAsync();
+            try
+            {
+                var manifestPath = Path.Combine(modsPath, "manifest.json");
+                var installedMods = new List<InstalledMod>();
+                
+                if (File.Exists(manifestPath))
+                {
+                    try
+                    {
+                        var manifestJson = File.ReadAllText(manifestPath);
+                        installedMods = JsonSerializer.Deserialize<List<InstalledMod>>(manifestJson, JsonOptions) ?? new List<InstalledMod>();
+                    }
+                    catch { }
+                }
+                
+                installedMods.RemoveAll(m => m.Id == localId || m.FileName == fileName || (newMod.CurseForgeId != null && m.CurseForgeId == newMod.CurseForgeId));
+                installedMods.Add(newMod);
+                
+                var manifestOptions = new JsonSerializerOptions(JsonOptions) { WriteIndented = true };
+                File.WriteAllText(manifestPath, JsonSerializer.Serialize(installedMods, manifestOptions));
+            }
+            finally
+            {
+                _modManifestLock.Release();
+            }
+            
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("Mods", $"Failed to install mod from base64: {ex.Message}");
+            return false;
+        }
+    }
+    
+    /// <summary>
     /// Installs a local mod file (JAR) to the specified instance by copying it to the mods folder.
     /// Also attempts to look up mod info on CurseForge using fingerprinting.
     /// Creates the mods directory if the instance doesn't exist yet.
@@ -5615,10 +5759,13 @@ rm -f ""$0""
             // Try to look up mod info on CurseForge using fingerprint
             try
             {
+                Logger.Info("Mods", $"Looking up mod metadata on CurseForge for: {fileName}");
                 var cfInfo = await LookupModOnCurseForgeAsync(destPath);
                 if (cfInfo != null)
                 {
                     Logger.Success("Mods", $"Found CurseForge match for {fileName}: {cfInfo.Name}");
+                    Logger.Info("Mods", $"  - Mod ID: {cfInfo.ModId}, File ID: {cfInfo.FileId}");
+                    Logger.Info("Mods", $"  - Author: {cfInfo.Author}, Version: {cfInfo.Version}");
                     newMod.CurseForgeId = cfInfo.ModId;
                     newMod.FileId = cfInfo.FileId;
                     newMod.Name = cfInfo.Name ?? modName;
@@ -5628,10 +5775,14 @@ rm -f ""$0""
                     newMod.IconUrl = cfInfo.IconUrl ?? "";
                     newMod.Id = cfInfo.ModId; // Use CurseForge ID instead of local ID
                 }
+                else
+                {
+                    Logger.Warning("Mods", $"No CurseForge match found for {fileName} - using local metadata");
+                }
             }
             catch (Exception ex)
             {
-                Logger.Info("Mods", $"Could not look up mod on CurseForge: {ex.Message}");
+                Logger.Warning("Mods", $"Could not look up mod on CurseForge: {ex.Message}");
             }
             
             // Update manifest with lock to prevent concurrent write issues
@@ -7075,6 +7226,118 @@ rm -f ""$0""
         {
             Logger.Warning("Folder", $"Failed to browse folder: {ex.Message}");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Browse for mod files using native OS dialog.
+    /// Returns array of selected file paths or empty array if cancelled.
+    /// </summary>
+    public async Task<string[]> BrowseModFilesAsync()
+    {
+        try
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                // Use osascript for macOS file picker
+                var script = @"tell application ""Finder""
+                    activate
+                    set theFiles to choose file with prompt ""Select Mod Files"" of type {""jar"", ""zip"", ""hmod"", ""litemod"", ""json""} with multiple selections allowed
+                    set filePaths to """"
+                    repeat with aFile in theFiles
+                        set filePaths to filePaths & POSIX path of aFile & ""\n""
+                    end repeat
+                    return filePaths
+                end tell";
+                
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "osascript",
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                
+                using var process = Process.Start(psi);
+                if (process == null) return Array.Empty<string>();
+                
+                await process.StandardInput.WriteAsync(script);
+                process.StandardInput.Close();
+                
+                var output = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                
+                if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+                {
+                    return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(p => p.Trim())
+                        .Where(p => !string.IsNullOrEmpty(p))
+                        .ToArray();
+                }
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                // Use PowerShell to show file picker on Windows with multiselect
+                var script = @"Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Filter = 'Mod Files (*.jar;*.zip;*.hmod;*.litemod;*.json)|*.jar;*.zip;*.hmod;*.litemod;*.json|All Files (*.*)|*.*'; $dialog.Multiselect = $true; $dialog.Title = 'Select Mod Files'; if ($dialog.ShowDialog() -eq 'OK') { $dialog.FileNames -join ""`n"" }";
+                
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powershell",
+                    Arguments = $"-NoProfile -Command \"{script}\"",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                
+                using var process = Process.Start(psi);
+                if (process == null) return Array.Empty<string>();
+                
+                var output = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                
+                if (!string.IsNullOrWhiteSpace(output))
+                {
+                    return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(p => p.Trim())
+                        .Where(p => !string.IsNullOrEmpty(p))
+                        .ToArray();
+                }
+            }
+            else
+            {
+                // Linux - use zenity
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "zenity",
+                    Arguments = "--file-selection --multiple --title=\"Select Mod Files\" --file-filter=\"Mod Files | *.jar *.zip *.hmod *.litemod *.json\" --separator=\"\\n\"",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                
+                using var process = Process.Start(psi);
+                if (process == null) return Array.Empty<string>();
+                
+                var output = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                
+                if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+                {
+                    return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(p => p.Trim())
+                        .Where(p => !string.IsNullOrEmpty(p))
+                        .ToArray();
+                }
+            }
+            
+            return Array.Empty<string>();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning("Files", $"Failed to browse files: {ex.Message}");
+            return Array.Empty<string>();
         }
     }
 

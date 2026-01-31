@@ -245,6 +245,7 @@ class Program
                         "OpenFolder" => app.OpenFolder(),
                         "SelectInstanceDirectory" => await app.SelectInstanceDirectoryAsync(),
                         "BrowseFolder" => await app.BrowseFolderAsync(GetArg<string?>(request.Args, 0)),
+                        "BrowseModFiles" => await app.BrowseModFilesAsync(),
                         
                         // News
                         "GetNews" => await app.GetNewsAsync(GetArg<int>(request.Args, 0)),
@@ -299,6 +300,11 @@ class Program
                             GetArg<string>(request.Args, 0),
                             GetArg<string>(request.Args, 1),
                             GetArg<int>(request.Args, 2)),
+                        "InstallModFromBase64" => await app.InstallModFromBase64(
+                            GetArg<string>(request.Args, 0),
+                            GetArg<string>(request.Args, 1),
+                            GetArg<string>(request.Args, 2),
+                            GetArg<int>(request.Args, 3)),
                         "ExportModList" => app.ExportModList(
                             GetArg<string>(request.Args, 0),
                             GetArg<int>(request.Args, 1)),

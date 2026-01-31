@@ -12,7 +12,8 @@ import {
   GetInstanceInstalledMods, InstallModFileToInstance,
   UninstallInstanceMod,
   OpenInstanceModsFolder, CheckInstanceModUpdates,
-  InstallLocalModFile, ExportModsToFolder, GetLastExportPath, ImportModList, BrowseFolder
+  InstallLocalModFile, ExportModsToFolder, GetLastExportPath, ImportModList, BrowseFolder, BrowseModFiles,
+  InstallModFromBase64
 } from '../../wailsjs/go/app/App';
 import { GameBranch } from '@/constants/enums';
 import { useAccentColor } from '../contexts/AccentColorContext';
@@ -282,6 +283,36 @@ export const ModManager: React.FC<ModManagerProps> = ({
   useEffect(() => {
     loadInstalledMods();
   }, [loadInstalledMods]);
+
+  // Keyboard shortcuts (Ctrl+A / Cmd+A to select all mods in installed tab)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for Ctrl+A (Windows/Linux) or Cmd+A (macOS)
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        // Only handle if we're in the installed tab and not in a text input
+        if (activeTab === 'installed' && 
+            !(e.target instanceof HTMLInputElement) && 
+            !(e.target instanceof HTMLTextAreaElement)) {
+          e.preventDefault();
+          console.log('[MOD MANAGER] Ctrl+A/Cmd+A pressed, selecting all mods');
+          // Select all installed mods
+          const allModIds = new Set(filteredInstalledMods.map(mod => mod.id));
+          setSelectedInstalledMods(allModIds);
+          setHighlightedInstalledMods(allModIds);
+        }
+      }
+      // Escape to deselect all
+      if (e.key === 'Escape') {
+        setSelectedInstalledMods(new Set());
+        setSelectedBrowseMods(new Set());
+        setHighlightedInstalledMods(new Set());
+        setHighlightedBrowseMods(new Set());
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, filteredInstalledMods]);
 
   // Load categories
   useEffect(() => {
@@ -857,28 +888,145 @@ export const ModManager: React.FC<ModManagerProps> = ({
     }
   };
   
+  // Helper function to read file as base64 (using ArrayBuffer for reliability)
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const arrayBuffer = reader.result as ArrayBuffer;
+        // Convert ArrayBuffer to base64
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const base64 = btoa(binary);
+        resolve(base64);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
     
+    console.log('[MOD MANAGER] handleDrop called');
+    console.log('[MOD MANAGER] Files dropped:', e.dataTransfer.files.length);
+    
     const files = Array.from(e.dataTransfer.files);
-    if (files.length === 0) return;
+    if (files.length === 0) {
+      console.log('[MOD MANAGER] No files in drop event');
+      return;
+    }
+    
+    console.log('[MOD MANAGER] Processing files:', files.map(f => f.name));
     
     setIsImporting(true);
     let successCount = 0;
     let modListImported = false;
     
     try {
+      // First, check if file.path is available (Electron-specific)
+      const firstFile = files[0] as any;
+      const hasFilePath = !!firstFile.path;
+      console.log('[MOD MANAGER] Has file.path:', hasFilePath);
+      
       for (const file of files) {
         const filePath = (file as any).path;
-        if (!filePath) {
-          setError(t('Cannot access file path. Drag files from your file manager.'));
-          continue;
-        }
+        console.log(`[MOD MANAGER] Processing ${file.name}, size: ${file.size} bytes`);
         
         // Check if it's a mod list JSON file
         if (file.name.endsWith('.json') && (file.name.includes('ModList') || file.name.includes('modlist'))) {
+          if (hasFilePath && filePath) {
+            // Use file path method
+            setImportProgress(t('Importing mod list...'));
+            console.log('[MOD MANAGER] Importing mod list from path:', filePath);
+            const count = await ImportModList(filePath, currentBranch, currentVersion);
+            console.log('[MOD MANAGER] Mod list imported, count:', count);
+            if (count > 0) {
+              successCount += count;
+              modListImported = true;
+            }
+          } else {
+            // Skip mod list JSON for now when no file path
+            console.log('[MOD MANAGER] Mod list import requires file path access, skipping:', file.name);
+          }
+        }
+        // Accept any mod file (JAR, ZIP, etc.)
+        else {
+          setImportProgress(t('Installing {{name}}...').replace('{{name}}', file.name));
+          
+          if (hasFilePath && filePath) {
+            // Use file path method (preferred, faster)
+            console.log('[MOD MANAGER] Installing via file path:', filePath);
+            const success = await InstallLocalModFile(filePath, currentBranch, currentVersion);
+            console.log('[MOD MANAGER] InstallLocalModFile result:', success);
+            if (success) {
+              successCount++;
+            }
+          } else {
+            // Use base64 method (works in all browsers)
+            try {
+              console.log('[MOD MANAGER] Reading file as base64:', file.name);
+              const base64Content = await readFileAsBase64(file);
+              console.log('[MOD MANAGER] Base64 length:', base64Content.length, 'first 50 chars:', base64Content.substring(0, 50));
+              
+              console.log('[MOD MANAGER] Calling InstallModFromBase64');
+              const success = await InstallModFromBase64(file.name, base64Content, currentBranch, currentVersion);
+              console.log('[MOD MANAGER] InstallModFromBase64 result:', success);
+              if (success) {
+                successCount++;
+              }
+            } catch (readErr) {
+              console.error('[MOD MANAGER] Failed to read file:', file.name, readErr);
+            }
+          }
+        }
+      }
+      
+      console.log('[MOD MANAGER] Final success count:', successCount);
+      
+      if (successCount > 0) {
+        console.log('[MOD MANAGER] Reloading installed mods');
+        // Give the backend a moment to finish writing metadata
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await loadInstalledMods();
+        setImportProgress(
+          modListImported 
+            ? t('Imported {{count}} mods').replace('{{count}}', successCount.toString())
+            : t('Installed {{count}} mod(s)').replace('{{count}}', successCount.toString())
+        );
+        setTimeout(() => setImportProgress(null), 3000);
+      } else {
+        console.log('[MOD MANAGER] No mods installed, showing error');
+        setError(t('Failed to install mods. Please try again.'));
+      }
+    } catch (err: any) {
+      console.error('[MOD MANAGER] Error in handleDrop:', err);
+      setError(err?.message || t('Failed to import mods'));
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  // Handle browsing for mod files via native file picker
+  const handleBrowseModFiles = async () => {
+    try {
+      const filePaths = await BrowseModFiles();
+      if (!filePaths || filePaths.length === 0) return;
+      
+      setIsImporting(true);
+      let successCount = 0;
+      let modListImported = false;
+      
+      for (const filePath of filePaths) {
+        const fileName = filePath.split(/[/\\]/).pop() || '';
+        
+        // Check if it's a mod list JSON file
+        if (fileName.endsWith('.json') && (fileName.includes('ModList') || fileName.includes('modlist'))) {
           setImportProgress(t('Importing mod list...'));
           const count = await ImportModList(filePath, currentBranch, currentVersion);
           if (count > 0) {
@@ -888,7 +1036,7 @@ export const ModManager: React.FC<ModManagerProps> = ({
         }
         // Accept any mod file (JAR, ZIP, etc.)
         else {
-          setImportProgress(t('Installing {{name}}...').replace('{{name}}', file.name));
+          setImportProgress(t('Installing {{name}}...').replace('{{name}}', fileName));
           const success = await InstallLocalModFile(filePath, currentBranch, currentVersion);
           if (success) {
             successCount++;
@@ -1017,6 +1165,14 @@ export const ModManager: React.FC<ModManagerProps> = ({
               title={(selectedInstalledMods.size > 0 || highlightedInstalledMods.size > 0) ? t(`Delete {{count}} mod(s)`).replace('{{count}}', (selectedInstalledMods.size + highlightedInstalledMods.size).toString()) : t('Select mods to delete')}
             >
               <Trash2 size={20} />
+            </button>
+            <button
+              onClick={handleBrowseModFiles}
+              disabled={isImporting}
+              className={`p-2 rounded-xl hover:bg-white/10 ${isImporting ? 'text-white/20 cursor-not-allowed' : 'text-white/60 hover:text-white'}`}
+              title={t('Add Mods')}
+            >
+              <Upload size={20} />
             </button>
             <button
               onClick={handleOpenExportModal}

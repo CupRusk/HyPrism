@@ -133,6 +133,8 @@ export function InstallModToInstance(arg1:number,arg2:string,arg3:number):Promis
 
 export function InstallLocalModFile(arg1:string,arg2:string,arg3:number):Promise<boolean>;
 
+export function InstallModFromBase64(arg1:string,arg2:string,arg3:string,arg4:number):Promise<boolean>;
+
 export function ExportModList(arg1:string,arg2:number):Promise<string|null>;
 
 export function ExportModsToFolder(arg1:string,arg2:number,arg3:string,arg4:string):Promise<string|null>;
@@ -184,6 +186,8 @@ export function SearchMods(arg1:string,arg2:number,arg3:number,arg4:Array<string
 export function SelectInstanceDirectory():Promise<string>;
 
 export function BrowseFolder(arg1?:string|null):Promise<string|null>;
+
+export function BrowseModFiles():Promise<string[]>;
 
 export function SetInstanceDirectory(arg1:string):Promise<string>;
 
