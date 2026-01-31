@@ -30,4 +30,4 @@ For older Linux OSes the Flatpak will be the only feasable solution.
 
 ## Credits
 Sanasol for maintaining and creating the auth server (https://github.com/sanasol/hytale-auth-server)
-And all of the awesome people that has contributed to this launcher
+And to all of the awesome people that has contributed to this launcher
