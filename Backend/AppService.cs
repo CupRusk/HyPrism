@@ -33,7 +33,8 @@ public class AppService : IDisposable
     
     private static readonly HttpClient HttpClient = new()
     {
-        Timeout = TimeSpan.FromSeconds(30)
+        // Use longer timeout for large file downloads - can be overridden per-request with cancellation tokens
+        Timeout = TimeSpan.FromMinutes(30)
     };
     
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -2688,7 +2689,7 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
                                 {
                                     int mappedProgress = applyBaseProgress + (int)(progress * 0.5 * progressPerPatch / 100);
                                     SendProgress(window, "update", mappedProgress, message, 0, 0);
-                                });
+                                }, _downloadCts.Token);
                                 
                                 // Clean up patch file
                                 if (File.Exists(patchPwrPath))
@@ -2826,7 +2827,7 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
                     // Map install progress (0-100) to 65-85%
                     int mappedProgress = 65 + (int)(progress * 0.20);
                     SendProgress(window, "install", mappedProgress, message, 0, 0);
-                });
+                }, _downloadCts.Token);
                 
                 // Clean up PWR file after successful extraction
                 if (File.Exists(pwrPath))
@@ -2836,6 +2837,11 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
                 
                 // Skip assets extraction on install to match legacy layout
                 ThrowIfCancelled();
+            }
+            catch (OperationCanceledException)
+            {
+                // Re-throw cancellation to be handled by outer catch
+                throw;
             }
             catch (Exception ex)
             {
@@ -2925,11 +2931,15 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
 
     public bool CancelDownload()
     {
+        Logger.Info("Download", "CancelDownload called");
         if (_downloadCts != null)
         {
+            Logger.Info("Download", "Cancelling download...");
             _downloadCts.Cancel();
+            Logger.Info("Download", "Download cancellation requested");
             return true;
         }
+        Logger.Warning("Download", "No download in progress to cancel");
         return false;
     }
 
@@ -5251,6 +5261,36 @@ rm -f ""$0""
         return true;
     }
 
+    // Onboarding state
+    public bool GetHasCompletedOnboarding() => _config.HasCompletedOnboarding;
+    
+    public bool SetHasCompletedOnboarding(bool completed)
+    {
+        _config.HasCompletedOnboarding = completed;
+        SaveConfig();
+        Logger.Info("Config", $"Onboarding completed: {completed}");
+        return true;
+    }
+
+    /// <summary>
+    /// Generates a random username for the onboarding flow.
+    /// </summary>
+    public string GetRandomUsername()
+    {
+        return GenerateRandomUsername();
+    }
+
+    /// <summary>
+    /// Resets the onboarding so it will show again on next launch.
+    /// </summary>
+    public bool ResetOnboarding()
+    {
+        _config.HasCompletedOnboarding = false;
+        SaveConfig();
+        Logger.Info("Config", "Onboarding reset - will show on next launch");
+        return true;
+    }
+
     // Online mode settings
     public bool GetOnlineMode() => _config.OnlineMode;
     
@@ -5327,19 +5367,6 @@ rm -f ""$0""
             return Task.FromResult<string?>(null);
         }
     }
-
-    // Hardware acceleration settings
-    public bool GetDisableHardwareAcceleration() => _config.DisableHardwareAcceleration;
-    
-    public bool SetDisableHardwareAcceleration(bool disabled)
-    {
-        _config.DisableHardwareAcceleration = disabled;
-        SaveConfig();
-        Logger.Info("Config", $"Hardware acceleration disabled set to: {disabled} (takes effect on restart)");
-        return true;
-    }
-
-    // Online Mode removed: launcher always runs offline
 
     // CurseForge API constants
     private const string CurseForgeBaseUrl = "https://api.curseforge.com/v1";
@@ -7707,10 +7734,6 @@ public class Config
     /// </summary>
     public string LauncherDataDirectory { get; set; } = "";
     /// <summary>
-    /// If true, disable GPU hardware acceleration (requires restart).
-    /// </summary>
-    public bool DisableHardwareAcceleration { get; set; } = false;
-    /// <summary>
     /// Accent color for the UI (hex format, e.g., "#FFA845").
     /// </summary>
     public string AccentColor { get; set; } = "#FFA845";
@@ -7735,6 +7758,10 @@ public class Config
     /// Index of the currently active profile. -1 means no profile selected (use UUID/Nick directly).
     /// </summary>
     public int ActiveProfileIndex { get; set; } = -1;
+    /// <summary>
+    /// Whether the user has completed the initial onboarding flow.
+    /// </summary>
+    public bool HasCompletedOnboarding { get; set; } = false;
 }
 
 /// <summary>
