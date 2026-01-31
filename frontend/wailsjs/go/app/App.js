@@ -235,6 +235,10 @@ export function GetAvatarPreview() {
     return callBackend('GetAvatarPreview');
 }
 
+export function GetAvatarPreviewForUUID(uuid) {
+    return callBackend('GetAvatarPreviewForUUID', uuid);
+}
+
 export function ClearAvatarCache() {
     return callBackend('ClearAvatarCache');
 }

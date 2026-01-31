@@ -85,14 +85,16 @@ export function GetNick():Promise<string>;
 
 export function GetAvatarPreview():Promise<string|null>;
 
+export function GetAvatarPreviewForUUID(uuid:string):Promise<string|null>;
+
 export function ClearAvatarCache():Promise<boolean>;
 
 // Profile Management
 export interface Profile {
-    Id: string;
-    UUID: string;
-    Name: string;
-    CreatedAt: string;
+    id: string;
+    uuid: string;
+    name: string;
+    createdAt: string;
 }
 
 export function GetProfiles():Promise<Profile[]>;

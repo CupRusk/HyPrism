@@ -203,6 +203,7 @@ class Program
                         "GetUUID" => app.GetUUID(),
                         "SetUUID" => app.SetUUID(GetArg<string>(request.Args, 0)),
                         "GetAvatarPreview" => app.GetAvatarPreview(),
+                        "GetAvatarPreviewForUUID" => app.GetAvatarPreviewForUUID(GetArg<string>(request.Args, 0)),
                         "ClearAvatarCache" => app.ClearAvatarCache(),
                         
                         // Profile Management

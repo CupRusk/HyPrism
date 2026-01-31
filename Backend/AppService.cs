@@ -56,6 +56,15 @@ public class AppService : IDisposable
         Directory.CreateDirectory(_appDir);
         _configPath = Path.Combine(_appDir, "config.json");
         _config = LoadConfig();
+        
+        // Update placeholder names to random ones immediately
+        if (_config.Nick == "Hyprism" || _config.Nick == "HyPrism" || _config.Nick == "Player")
+        {
+            _config.Nick = GenerateRandomUsername();
+            SaveConfig();
+            Logger.Info("Config", $"Updated placeholder username to: {_config.Nick}");
+        }
+        
         MigrateLegacyData();
         _butlerService = new ButlerService(_appDir);
         _discordService = new DiscordService();
@@ -1046,10 +1055,10 @@ public class AppService : IDisposable
             config.UUID = Guid.NewGuid().ToString();
         }
 
-        // Default nick to Hyprism if empty or placeholder
-        if (string.IsNullOrWhiteSpace(config.Nick) || config.Nick == "Player")
+        // Default nick to random name if empty or placeholder
+        if (string.IsNullOrWhiteSpace(config.Nick) || config.Nick == "Player" || config.Nick == "Hyprism" || config.Nick == "HyPrism")
         {
-            config.Nick = "Hyprism";
+            config.Nick = GenerateRandomUsername();
         }
 
         // Migrate legacy "latest" branch to release
@@ -1071,6 +1080,37 @@ public class AppService : IDisposable
     {
         SaveConfigInternal(_config);
     }
+    
+    /// <summary>
+    /// Generates a random username for new users.
+    /// Format: Adjective + Noun + 4-digit number (max 16 chars total)
+    /// </summary>
+    private static string GenerateRandomUsername()
+    {
+        var random = new Random();
+        
+        // Short adjectives (max 5 chars)
+        var adjectives = new[] { 
+            "Happy", "Swift", "Brave", "Noble", "Quiet", "Bold", "Lucky", "Epic",
+            "Jolly", "Lunar", "Solar", "Azure", "Royal", "Foxy", "Wacky", "Zesty",
+            "Fizzy", "Dizzy", "Funky", "Jazzy", "Snowy", "Rainy", "Sunny", "Windy"
+        };
+        
+        // Short nouns (max 6 chars)
+        var nouns = new[] {
+            "Panda", "Tiger", "Wolf", "Dragon", "Knight", "Ranger", "Mage", "Fox",
+            "Bear", "Eagle", "Hawk", "Lion", "Falcon", "Raven", "Owl", "Shark",
+            "Cobra", "Viper", "Lynx", "Badger", "Otter", "Pirate", "Ninja", "Viking"
+        };
+        
+        var adj = adjectives[random.Next(adjectives.Length)];
+        var noun = nouns[random.Next(nouns.Length)];
+        var num = random.Next(1000, 9999);
+        
+        var name = $"{adj}{noun}{num}";
+        // Safety truncate to 16 chars
+        return name.Length <= 16 ? name : name.Substring(0, 16);
+    }
 
     // Config
     public Config QueryConfig() => _config;
@@ -1085,13 +1125,36 @@ public class AppService : IDisposable
     /// </summary>
     public string? GetAvatarPreview()
     {
+        return GetAvatarPreviewForUUID(_config.UUID);
+    }
+    
+    /// <summary>
+    /// Gets the avatar preview for a specific UUID.
+    /// Checks profile folder first, then game cache, then persistent backup.
+    /// </summary>
+    public string? GetAvatarPreviewForUUID(string uuid)
+    {
         try
         {
-            var uuid = _config.UUID;
             if (string.IsNullOrWhiteSpace(uuid))
             {
-                Logger.Warning("Avatar", "No UUID configured");
                 return null;
+            }
+            
+            // First check profile folder (most reliable for stored profiles)
+            var profile = _config.Profiles?.FirstOrDefault(p => p.UUID == uuid);
+            if (profile != null)
+            {
+                var profilesDir = GetProfilesFolder();
+                var safeName = SanitizeFileName(profile.Name);
+                var profileDir = Path.Combine(profilesDir, safeName);
+                var profileAvatarPath = Path.Combine(profileDir, "avatar.png");
+                
+                if (File.Exists(profileAvatarPath) && new FileInfo(profileAvatarPath).Length > 100)
+                {
+                    var bytes = File.ReadAllBytes(profileAvatarPath);
+                    return $"data:image/png;base64,{Convert.ToBase64String(bytes)}";
+                }
             }
             
             var branch = NormalizeVersionType(_config.VersionType);
@@ -1235,7 +1298,9 @@ public class AppService : IDisposable
             }
         }
         
-        return _config.Profiles ?? new List<Profile>();
+        var profiles = _config.Profiles ?? new List<Profile>();
+        Logger.Info("Profile", $"GetProfiles returning {profiles.Count} profiles");
+        return profiles;
     }
     
     /// <summary>
@@ -1285,7 +1350,9 @@ public class AppService : IDisposable
             
             _config.Profiles ??= new List<Profile>();
             _config.Profiles.Add(profile);
+            Logger.Info("Profile", $"Profile added to list. Total profiles: {_config.Profiles.Count}");
             SaveConfig();
+            Logger.Info("Profile", $"Config saved to disk");
             
             // Save profile to disk folder
             SaveProfileToDisk(profile);
@@ -1334,8 +1401,8 @@ public class AppService : IDisposable
             
             SaveConfig();
             
-            // Delete profile folder from disk
-            DeleteProfileFromDisk(profileId);
+            // Delete profile folder from disk (pass name for name-based folder)
+            DeleteProfileFromDisk(profileId, profile.Name);
             
             Logger.Success("Profile", $"Deleted profile '{profile.Name}'");
             return true;
@@ -1360,7 +1427,17 @@ public class AppService : IDisposable
                 return false;
             }
             
+            // First, backup current profile's skin data before switching
+            var currentUuid = _config.UUID;
+            if (!string.IsNullOrWhiteSpace(currentUuid))
+            {
+                BackupProfileSkinData(currentUuid);
+            }
+            
             var profile = _config.Profiles[index];
+            
+            // Restore the new profile's skin data
+            RestoreProfileSkinData(profile);
             
             // Update current UUID and Nick
             _config.UUID = profile.UUID;
@@ -1442,7 +1519,9 @@ public class AppService : IDisposable
         try
         {
             var profilesDir = GetProfilesFolder();
-            var profileDir = Path.Combine(profilesDir, profile.Id);
+            // Use profile name as folder name (sanitize for filesystem)
+            var safeName = SanitizeFileName(profile.Name);
+            var profileDir = Path.Combine(profilesDir, safeName);
             Directory.CreateDirectory(profileDir);
             
             // Create the shell script with profile info
@@ -1460,8 +1539,8 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
 ";
             File.WriteAllText(shPath, shContent);
             
-            // Copy avatar if exists
-            CopyProfileAvatar(profile.UUID, profileDir);
+            // Copy skin and avatar from game cache to profile folder
+            CopyProfileSkinData(profile.UUID, profileDir);
             
             Logger.Info("Profile", $"Saved profile to disk: {profileDir}");
         }
@@ -1472,7 +1551,45 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
     }
     
     /// <summary>
-    /// Copies the avatar for a given UUID to a profile folder.
+    /// Copies skin and avatar data from game cache to a profile folder.
+    /// </summary>
+    private void CopyProfileSkinData(string uuid, string profileDir)
+    {
+        try
+        {
+            // Get game UserData path
+            var branch = NormalizeVersionType(_config.VersionType);
+            var versionPath = ResolveInstancePath(branch, 0, preferExisting: true);
+            var userDataPath = GetInstanceUserDataPath(versionPath);
+            
+            // Copy skin JSON
+            var skinCacheDir = Path.Combine(userDataPath, "CachedPlayerSkins");
+            var skinPath = Path.Combine(skinCacheDir, $"{uuid}.json");
+            if (File.Exists(skinPath))
+            {
+                var destPath = Path.Combine(profileDir, "skin.json");
+                File.Copy(skinPath, destPath, true);
+                Logger.Info("Profile", $"Copied skin for UUID {uuid}");
+            }
+            
+            // Copy avatar PNG
+            var avatarCacheDir = Path.Combine(userDataPath, "CachedAvatarPreviews");
+            var avatarPath = Path.Combine(avatarCacheDir, $"{uuid}.png");
+            if (File.Exists(avatarPath))
+            {
+                var destPath = Path.Combine(profileDir, "avatar.png");
+                File.Copy(avatarPath, destPath, true);
+                Logger.Info("Profile", $"Copied avatar for UUID {uuid}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning("Profile", $"Failed to copy skin data: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Copies the avatar for a given UUID to a profile folder (legacy, now uses CopyProfileSkinData).
     /// </summary>
     private void CopyProfileAvatar(string uuid, string profileDir)
     {
@@ -1516,7 +1633,15 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
         try
         {
             var profilesDir = GetProfilesFolder();
-            var profileDir = Path.Combine(profilesDir, profile.Id);
+            var safeName = SanitizeFileName(profile.Name);
+            var profileDir = Path.Combine(profilesDir, safeName);
+            
+            // Also check for old folder with ID and rename it
+            var oldProfileDir = Path.Combine(profilesDir, profile.Id);
+            if (Directory.Exists(oldProfileDir) && !Directory.Exists(profileDir))
+            {
+                Directory.Move(oldProfileDir, profileDir);
+            }
             
             if (!Directory.Exists(profileDir))
             {
@@ -1560,13 +1685,27 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
     /// <summary>
     /// Deletes a profile's disk folder.
     /// </summary>
-    private void DeleteProfileFromDisk(string profileId)
+    private void DeleteProfileFromDisk(string profileId, string? profileName = null)
     {
         try
         {
             var profilesDir = GetProfilesFolder();
-            var profileDir = Path.Combine(profilesDir, profileId);
             
+            // Try to delete by name first if provided
+            if (!string.IsNullOrEmpty(profileName))
+            {
+                var safeName = SanitizeFileName(profileName);
+                var profileDirByName = Path.Combine(profilesDir, safeName);
+                if (Directory.Exists(profileDirByName))
+                {
+                    Directory.Delete(profileDirByName, true);
+                    Logger.Info("Profile", $"Deleted profile from disk: {profileDirByName}");
+                    return;
+                }
+            }
+            
+            // Fallback to ID-based folder (for migration)
+            var profileDir = Path.Combine(profilesDir, profileId);
             if (Directory.Exists(profileDir))
             {
                 Directory.Delete(profileDir, true);
@@ -1576,6 +1715,116 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
         catch (Exception ex)
         {
             Logger.Warning("Profile", $"Failed to delete profile from disk: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Sanitizes a string to be safe for use as a filename.
+    /// </summary>
+    private string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = string.Join("_", name.Split(invalid, StringSplitOptions.RemoveEmptyEntries));
+        return string.IsNullOrWhiteSpace(sanitized) ? "profile" : sanitized;
+    }
+    
+    /// <summary>
+    /// Backs up the skin data for a profile (from game cache to profile folder).
+    /// </summary>
+    private void BackupProfileSkinData(string uuid)
+    {
+        try
+        {
+            // Find the profile by UUID
+            var profile = _config.Profiles?.FirstOrDefault(p => p.UUID == uuid);
+            if (profile == null)
+            {
+                return;
+            }
+            
+            var profilesDir = GetProfilesFolder();
+            var safeName = SanitizeFileName(profile.Name);
+            var profileDir = Path.Combine(profilesDir, safeName);
+            Directory.CreateDirectory(profileDir);
+            
+            // Get game UserData path
+            var branch = NormalizeVersionType(_config.VersionType);
+            var versionPath = ResolveInstancePath(branch, 0, preferExisting: true);
+            var userDataPath = GetInstanceUserDataPath(versionPath);
+            
+            // Backup skin JSON
+            var skinCacheDir = Path.Combine(userDataPath, "CachedPlayerSkins");
+            var skinPath = Path.Combine(skinCacheDir, $"{uuid}.json");
+            if (File.Exists(skinPath))
+            {
+                var destPath = Path.Combine(profileDir, "skin.json");
+                File.Copy(skinPath, destPath, true);
+                Logger.Info("Profile", $"Backed up skin for {profile.Name}");
+            }
+            
+            // Backup avatar preview
+            var avatarCacheDir = Path.Combine(userDataPath, "CachedAvatarPreviews");
+            var avatarPath = Path.Combine(avatarCacheDir, $"{uuid}.png");
+            if (File.Exists(avatarPath))
+            {
+                var destPath = Path.Combine(profileDir, "avatar.png");
+                File.Copy(avatarPath, destPath, true);
+                Logger.Info("Profile", $"Backed up avatar for {profile.Name}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning("Profile", $"Failed to backup skin data: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Restores the skin data for a profile (from profile folder to game cache).
+    /// </summary>
+    private void RestoreProfileSkinData(Profile profile)
+    {
+        try
+        {
+            var profilesDir = GetProfilesFolder();
+            var safeName = SanitizeFileName(profile.Name);
+            var profileDir = Path.Combine(profilesDir, safeName);
+            
+            if (!Directory.Exists(profileDir))
+            {
+                Logger.Info("Profile", $"No profile folder to restore from for {profile.Name}");
+                return;
+            }
+            
+            // Get game UserData path
+            var branch = NormalizeVersionType(_config.VersionType);
+            var versionPath = ResolveInstancePath(branch, 0, preferExisting: true);
+            var userDataPath = GetInstanceUserDataPath(versionPath);
+            
+            // Restore skin JSON
+            var skinBackupPath = Path.Combine(profileDir, "skin.json");
+            if (File.Exists(skinBackupPath))
+            {
+                var skinCacheDir = Path.Combine(userDataPath, "CachedPlayerSkins");
+                Directory.CreateDirectory(skinCacheDir);
+                var destPath = Path.Combine(skinCacheDir, $"{profile.UUID}.json");
+                File.Copy(skinBackupPath, destPath, true);
+                Logger.Success("Profile", $"Restored skin for {profile.Name}");
+            }
+            
+            // Restore avatar preview
+            var avatarBackupPath = Path.Combine(profileDir, "avatar.png");
+            if (File.Exists(avatarBackupPath))
+            {
+                var avatarCacheDir = Path.Combine(userDataPath, "CachedAvatarPreviews");
+                Directory.CreateDirectory(avatarCacheDir);
+                var destPath = Path.Combine(avatarCacheDir, $"{profile.UUID}.png");
+                File.Copy(avatarBackupPath, destPath, true);
+                Logger.Success("Profile", $"Restored avatar for {profile.Name}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning("Profile", $"Failed to restore skin data: {ex.Message}");
         }
     }
     
@@ -3675,13 +3924,14 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
         sessionUuid = baseUuid;
         Logger.Info("Game", $"Using saved UUID: {sessionUuid}");
 
-        // STEP 2: Fetch auth token - ALWAYS needed when client is patched for custom auth server
-        // The patched binary requires valid tokens from sanasol.ws even for singleplayer
+        // STEP 2: Fetch auth token - only if OnlineMode is enabled
+        // If user wants offline mode, skip token fetching entirely
         string? identityToken = null;
         string? sessionToken = null;
-        if (!string.IsNullOrWhiteSpace(_config.AuthDomain))
+        
+        if (_config.OnlineMode && !string.IsNullOrWhiteSpace(_config.AuthDomain))
         {
-            Logger.Info("Game", $"Fetching auth tokens from {_config.AuthDomain} (required for patched client)...");
+            Logger.Info("Game", $"Online mode enabled - fetching auth tokens from {_config.AuthDomain}...");
             
             try
             {
@@ -3751,6 +4001,15 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
         // Use per-instance UserData folder - this keeps skins/settings with the game instance
         string userDataDir = GetInstanceUserDataPath(versionPath);
         Directory.CreateDirectory(userDataDir);
+        
+        // Restore current profile's skin data before launching the game
+        // This ensures the player's custom skin is loaded from their profile
+        var currentProfile = _config.Profiles?.FirstOrDefault(p => p.UUID == sessionUuid);
+        if (currentProfile != null)
+        {
+            RestoreProfileSkinData(currentProfile);
+            Logger.Info("Game", $"Restored skin data for profile '{currentProfile.Name}'");
+        }
 
         Logger.Info("Game", $"Launching: {executable}");
         Logger.Info("Game", $"Java: {javaPath}");
@@ -3768,9 +4027,10 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
             $"--name \"{_config.Nick}\""
         };
         
-        // Add auth mode: always use authenticated mode when we have tokens (required for patched client)
-        // The patched client expects valid tokens from the custom auth server regardless of online/offline setting
-        if (!string.IsNullOrEmpty(identityToken) && !string.IsNullOrEmpty(sessionToken))
+        // Add auth mode based on user's OnlineMode preference
+        // If OnlineMode is OFF, always use offline mode regardless of tokens
+        // If OnlineMode is ON and we have tokens, use authenticated mode
+        if (_config.OnlineMode && !string.IsNullOrEmpty(identityToken) && !string.IsNullOrEmpty(sessionToken))
         {
             gameArgs.Add("--auth-mode authenticated");
             gameArgs.Add($"--uuid \"{sessionUuid}\"");
@@ -3780,10 +4040,10 @@ export HYPRISM_PROFILE_ID=""{profile.Id}""
         }
         else
         {
-            // No tokens available - this will likely fail on patched clients
-            gameArgs.Add("--auth-mode insecure");
+            // Offline mode - either user selected it or no tokens available
+            gameArgs.Add("--auth-mode offline");
             gameArgs.Add($"--uuid \"{sessionUuid}\"");
-            Logger.Warning("Game", $"No auth tokens - using insecure mode (may fail on patched client)");
+            Logger.Info("Game", $"Using offline mode with UUID: {sessionUuid}");
         }
 
         // On macOS/Linux, create a launch script to run with clean environment
@@ -3888,6 +4148,9 @@ exec env \
             var exitCode = _gameProcess.ExitCode;
             Logger.Info("Game", $"Game process exited with code: {exitCode}");
             _gameProcess = null;
+            
+            // Backup current profile's skin data after game exits (save any changes made during gameplay)
+            BackupProfileSkinData(_config.UUID);
             
             // Set Discord presence back to Idle
             _discordService.SetPresence(DiscordService.PresenceState.Idle);

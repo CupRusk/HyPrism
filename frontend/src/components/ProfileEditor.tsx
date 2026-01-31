@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { X, RefreshCw, Check, User, Edit3, Copy, CheckCircle, Plus, Trash2, Dices } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAccentColor } from '../contexts/AccentColorContext';
-import { GetUUID, SetUUID, GetNick, SetNick, GetAvatarPreview, GetProfiles, CreateProfile, DeleteProfile, SwitchProfile, SaveCurrentAsProfile } from '../../wailsjs/go/app/App';
+import { GetUUID, SetUUID, GetNick, SetNick, GetAvatarPreview, GetAvatarPreviewForUUID, GetProfiles, CreateProfile, DeleteProfile, SwitchProfile, SaveCurrentAsProfile } from '../../wailsjs/go/app/App';
 import type { Profile } from '../../wailsjs/go/app/App';
 
 interface ProfileEditorProps {
@@ -51,15 +51,29 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ isOpen, onClose, o
     
     // Profile management state
     const [profiles, setProfiles] = useState<Profile[]>([]);
+    const [profileAvatars, setProfileAvatars] = useState<Record<string, string | null>>({});
     
     // New profile creation flow - directly opens name editor
     const [isCreatingNewProfile, setIsCreatingNewProfile] = useState(false);
 
-    // Load profiles
+    // Load profiles and their avatars
     const loadProfiles = useCallback(async () => {
         try {
             const profileList = await GetProfiles();
+            console.log('[ProfileEditor] Loaded profiles:', JSON.stringify(profileList, null, 2));
             setProfiles(profileList || []);
+            
+            // Load avatars for all profiles
+            const avatars: Record<string, string | null> = {};
+            for (const profile of profileList || []) {
+                try {
+                    const avatar = await GetAvatarPreviewForUUID(profile.uuid);
+                    avatars[profile.uuid] = avatar;
+                } catch {
+                    avatars[profile.uuid] = null;
+                }
+            }
+            setProfileAvatars(avatars);
         } catch (err) {
             console.error('Failed to load profiles:', err);
         }
@@ -244,9 +258,17 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ isOpen, onClose, o
     };
     
     // Profile management handlers
-    const handleSwitchProfile = async (index: number) => {
+    const handleSwitchProfile = async (profileId: string) => {
         try {
-            const success = await SwitchProfile(index);
+            // Find the actual index of this profile in the full profiles list
+            const actualIndex = profiles.findIndex(p => p.id === profileId);
+            if (actualIndex === -1) {
+                console.error('Profile not found in profiles list');
+                return;
+            }
+            
+            console.log('[ProfileEditor] Switching to profile at index:', actualIndex, 'with ID:', profileId);
+            const success = await SwitchProfile(actualIndex);
             if (success) {
                 await loadProfile();
                 await loadAvatar();
@@ -284,32 +306,13 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ isOpen, onClose, o
         console.log('[ProfileEditor] Creating new profile:', randomName, newUuid);
         
         try {
-            // Create profile with random name and new UUID
+            // Create profile with random name and new UUID - DO NOT SWITCH TO IT
             const profile = await CreateProfile(randomName, newUuid);
             console.log('[ProfileEditor] Created profile:', profile);
             
             if (profile) {
-                // Reload profiles list
+                // Just reload profiles list - don't switch to the new profile
                 await loadProfiles();
-                
-                // Set the new UUID and name as current
-                await SetUUID(newUuid);
-                await SetNick(randomName);
-                
-                // Update local state
-                setUuid(newUuid);
-                setUsernameState(randomName);
-                setEditUsername(randomName);
-                setEditUuid(newUuid);
-                setLocalAvatar(null); // New profile has no avatar
-                
-                // Switch to the new profile by index
-                const profileList = await GetProfiles();
-                const newProfileIndex = profileList?.findIndex(p => p.UUID === newUuid);
-                if (newProfileIndex !== undefined && newProfileIndex >= 0) {
-                    await SwitchProfile(newProfileIndex);
-                }
-                
                 onProfileUpdate?.();
             }
         } catch (err) {
@@ -338,58 +341,72 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ isOpen, onClose, o
                     <div className="w-48 bg-[#151515] border-r border-white/5 flex flex-col py-4 overflow-y-auto">
                         <h2 className="text-lg font-bold text-white px-4 mb-4">{t('Saved Profiles')}</h2>
                         
-                        {/* Profile Navigation - Like Settings tabs */}
+                        {/* Profile Navigation - All Profiles */}
                         <nav className="flex-1 space-y-1 px-2 overflow-y-auto">
-                            {/* Current Profile (Active) */}
-                            <button
-                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors"
-                                style={{ backgroundColor: `${accentColor}20`, color: accentColor }}
-                            >
-                                <div 
-                                    className="w-8 h-8 rounded-full overflow-hidden border-2 flex-shrink-0 flex items-center justify-center"
-                                    style={{ borderColor: accentColor, backgroundColor: localAvatar ? 'transparent' : `${accentColor}20` }}
-                                >
-                                    {localAvatar ? (
-                                        <img
-                                            src={localAvatar}
-                                            className="w-full h-full object-cover object-[center_20%]"
-                                            alt="Avatar"
-                                        />
-                                    ) : (
-                                        <User size={14} style={{ color: accentColor }} />
-                                    )}
-                                </div>
-                                <span className="truncate font-medium">{username}</span>
-                            </button>
-                            
-                            {/* Other Saved Profiles */}
-                            {profiles.filter(p => p.UUID !== uuid && p.Name && p.Name.trim() !== '').map((profile) => (
-                                <div
-                                    key={profile.Id}
-                                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-white/60 hover:text-white hover:bg-white/5 transition-colors group"
-                                >
-                                    <button
-                                        onClick={() => handleSwitchProfile(profiles.indexOf(profile))}
-                                        className="flex items-center gap-3 flex-1 min-w-0"
+                            {/* All Profiles - show all of them with current one highlighted */}
+                            {(() => {
+                                const filtered = profiles.filter(p => p.name && p.name.trim() !== '');
+                                console.log('[ProfileEditor] Rendering profiles:', JSON.stringify({
+                                    total: profiles.length,
+                                    filtered: filtered.length,
+                                    currentUUID: uuid,
+                                    allProfiles: profiles,
+                                    filteredProfiles: filtered
+                                }, null, 2));
+                                return filtered.map((profile, index) => {
+                                const isCurrentProfile = profile.uuid === uuid;
+                                const profileAvatar = profileAvatars[profile.uuid];
+                                
+                                return (
+                                    <div
+                                        key={profile.id}
+                                        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors group ${
+                                            isCurrentProfile 
+                                                ? '' 
+                                                : 'text-white/60 hover:text-white hover:bg-white/5'
+                                        }`}
+                                        style={isCurrentProfile ? { backgroundColor: `${accentColor}20`, color: accentColor } : undefined}
                                     >
-                                        <div 
-                                            className="w-8 h-8 rounded-full overflow-hidden border border-white/20 flex-shrink-0 flex items-center justify-center bg-white/5"
+                                        <button
+                                            onClick={() => !isCurrentProfile && handleSwitchProfile(profile.id)}
+                                            className="flex items-center gap-3 flex-1 min-w-0"
+                                            disabled={isCurrentProfile}
                                         >
-                                            <User size={14} className="text-white/40" />
-                                        </div>
-                                        <span className="truncate">{profile.Name || 'Unnamed'}</span>
-                                    </button>
-                                    <button
-                                        onClick={(e) => handleDeleteProfile(profile.Id, e)}
-                                        className="p-1.5 rounded-lg text-red-400/60 hover:text-red-400 hover:bg-red-500/20 transition-all flex-shrink-0 opacity-0 group-hover:opacity-100"
-                                        title={t('Delete Profile')}
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                </div>
-                            ))}
+                                            <div 
+                                                className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center"
+                                                style={isCurrentProfile 
+                                                    ? { borderWidth: '2px', borderColor: accentColor, backgroundColor: profileAvatar ? 'transparent' : `${accentColor}20` }
+                                                    : { borderWidth: '1px', borderColor: 'rgba(255,255,255,0.2)', backgroundColor: profileAvatar ? 'transparent' : 'rgba(255,255,255,0.05)' }
+                                                }
+                                            >
+                                                {profileAvatar ? (
+                                                    <img
+                                                        src={profileAvatar}
+                                                        className="w-full h-full object-cover object-[center_20%]"
+                                                        alt="Avatar"
+                                                    />
+                                                ) : (
+                                                    <User size={14} style={isCurrentProfile ? { color: accentColor } : { color: 'rgba(255,255,255,0.4)' }} />
+                                                )}
+                                            </div>
+                                            <span className={`truncate ${isCurrentProfile ? 'font-medium' : ''}`}>
+                                                {profile.name || 'Unnamed'}
+                                            </span>
+                                        </button>
+                                        {!isCurrentProfile && (
+                                            <button
+                                                onClick={(e) => handleDeleteProfile(profile.id, e)}
+                                                className="p-1.5 rounded-lg text-red-400/60 hover:text-red-400 hover:bg-red-500/20 transition-all flex-shrink-0 opacity-0 group-hover:opacity-100"
+                                                title={t('Delete Profile')}
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })})()}
                             
-                            {profiles.filter(p => p.UUID !== uuid && p.Name && p.Name.trim() !== '').length === 0 && (
+                            {profiles.filter(p => p.name && p.name.trim() !== '').length === 0 && (
                                 <p className="text-center text-white/20 text-xs py-4 px-2">
                                     {t('No saved profiles yet')}
                                 </p>
