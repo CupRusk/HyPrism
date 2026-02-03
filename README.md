@@ -18,6 +18,7 @@ A multiplatform Hytale launcher with mod manager and more!
 ## Installation
 ``bash <(curl -fsSL https://raw.githubusercontent.com/yyyumeniku/HyPrism/main/scripts/appimage_installer/ins.sh)
 ``
+*Note: This installer is for Linux x86_64 AppImage only*
 
 OR
 
